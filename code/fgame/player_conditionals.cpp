@@ -1216,6 +1216,20 @@ qboolean Player::CondHardImpact(Conditional& condition)
 
 qboolean Player::CondCanFall(Conditional& condition)
 {
+    Vector  start;
+    Vector  end;
+    trace_t trace;
+
+    //
+    // Check if moving forward will cause the player to fall
+    //
+    start = origin + yaw_forward * 52.0f;
+    end   = start;
+    end.z -= STEPSIZE * 2;
+
+    trace   = G_Trace(start, mins, maxs, end, this, MASK_PLAYERSOLID, true, "CheckMoveFlags");
+    canfall = (trace.fraction >= 1.0f);
+
     return canfall;
 }
 

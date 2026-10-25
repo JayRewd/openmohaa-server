@@ -126,6 +126,9 @@ public:
     int inttime;
     int intframetime;
 
+    // Cached once per frame for FFA UpdateStats (STAT_HIGHEST_SCORE)
+    int highestScore;
+
     float time;
     float frametime;
 

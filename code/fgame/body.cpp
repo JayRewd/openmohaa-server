@@ -45,37 +45,3 @@ Body::Body()
 
     PostEvent(EV_DeathSinkStart, 5.0f);
 }
-
-void Body::Damage(Event *ev)
-{
-    str      gib_name;
-    int      number_of_gibs;
-    float    scale;
-    Animate *ent;
-    str      real_gib_name;
-
-    if (!com_blood->integer) {
-        return;
-    }
-
-    gib_name       = "fx_rgib";
-    number_of_gibs = 5;
-    scale          = 1.2f;
-
-    // Spawn the gibs
-    real_gib_name = gib_name;
-    real_gib_name += number_of_gibs;
-    real_gib_name += ".tik";
-
-    ent = new Animate;
-    ent->setModel(real_gib_name.c_str());
-    ent->setScale(scale);
-    ent->setOrigin(centroid);
-    ent->NewAnim("idle");
-    ent->PostEvent(EV_Remove, 1.0f);
-
-    Sound("snd_decap", CHAN_BODY, 1.0f, 300.0f);
-
-    this->hideModel();
-    this->takedamage = DAMAGE_NO;
-}

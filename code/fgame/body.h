@@ -31,9 +31,6 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 //=============================================================
 class Body : public Animate
 {
-private:
-    void Damage(Event *ev);
-
 public:
     CLASS_PROTOTYPE(Body);
     Body();

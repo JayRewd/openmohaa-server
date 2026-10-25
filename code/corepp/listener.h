@@ -515,6 +515,9 @@ public:
     static bool EventSystemStarted;
     static bool ProcessingEvents;
 
+    // Pending events for this object in the global EventQueue
+    int m_iPendingEvents;
+
 private:
 #ifdef WITH_SCRIPT_ENGINE
     void ExecuteScriptInternal(Event *ev, ScriptVariable& scriptVariable);
@@ -734,6 +737,7 @@ void L_ClearEventList();
 bool L_EventSystemStarted(void);
 void L_InitEvents(void);
 void L_ProcessPendingEvents();
+void L_RecountPendingEvents();
 void L_ShutdownEvents(void);
 void L_ArchiveEvents(Archiver& arc);
 void L_UnarchiveEvents(Archiver& arc);

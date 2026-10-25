@@ -76,13 +76,17 @@ Conditional::Conditional()
     checked         = false;
 }
 
-Expression::Expression() {}
+Expression::Expression()
+{
+    targetState = NULL;
+}
 
 Expression::Expression(const Expression& exp)
 {
     int i;
 
-    value = exp.value;
+    value       = exp.value;
+    targetState = exp.targetState;
 
     for (i = 1; i <= exp.conditions.NumObjects(); i++) {
         conditions.AddObject(exp.conditions.ObjectAt(i));
@@ -95,7 +99,8 @@ Expression::Expression(Script& script, State& state)
     condition_t condition;
     int         start;
 
-    value = script.GetToken(true);
+    targetState = NULL;
+    value       = script.GetToken(true);
 
     if (!script.TokenAvailable(false) || Q_stricmp(script.GetToken(false), ":")) {
         gi.Error(ERR_DROP, "%s: Expecting ':' on line %d.\n", script.Filename(), script.GetLineNumber());
@@ -345,35 +350,82 @@ void State::readStates(Script& script)
     }
 }
 
-void State::ParseAndProcessCommand(str command, Entity *target)
+void State::ResolveCommands(void)
+{
+    int    i, count;
+    Script script;
+
+    resolvedEntryCommands.FreeObjectList();
+    resolvedExitCommands.FreeObjectList();
+
+    count = entryCommands.NumObjects();
+    for (i = 1; i <= count; i++) {
+        StateCommand cmd;
+        const str&   command = entryCommands.ObjectAt(i);
+
+        script.Parse(command, command.length(), "CommandString");
+        while (script.TokenAvailable(false)) {
+            if (cmd.argv.NumObjects() >= MAX_COMMANDS) {
+                gi.DPrintf("State:ResolveCommands : Line exceeds %d command limit", MAX_COMMANDS);
+                script.SkipToEOL();
+                break;
+            }
+            cmd.argv.AddObject(script.GetToken(false));
+        }
+
+        if (cmd.argv.NumObjects() > 0) {
+            resolvedEntryCommands.AddObject(cmd);
+        }
+    }
+
+    count = exitCommands.NumObjects();
+    for (i = 1; i <= count; i++) {
+        StateCommand cmd;
+        const str&   command = exitCommands.ObjectAt(i);
+
+        script.Parse(command, command.length(), "CommandString");
+        while (script.TokenAvailable(false)) {
+            if (cmd.argv.NumObjects() >= MAX_COMMANDS) {
+                gi.DPrintf("State:ResolveCommands : Line exceeds %d command limit", MAX_COMMANDS);
+                script.SkipToEOL();
+                break;
+            }
+            cmd.argv.AddObject(script.GetToken(false));
+        }
+
+        if (cmd.argv.NumObjects() > 0) {
+            resolvedExitCommands.AddObject(cmd);
+        }
+    }
+
+    // Raw command strings are no longer needed after pretok
+    entryCommands.FreeObjectList();
+    exitCommands.FreeObjectList();
+}
+
+void State::ParseAndProcessCommand(const StateCommand& command, Entity *target)
 {
     int         argc;
     const char *argv[MAX_COMMANDS];
-    char        args[MAX_COMMANDS][SCRIPT_MAXTOKEN];
-    Script      script;
     Event      *event;
+    int         i;
 
-    script.Parse(command, command.length(), "CommandString");
-
-    argc = 0;
-    while (script.TokenAvailable(false)) {
-        if (argc >= MAX_COMMANDS) {
-            gi.DPrintf("State:ParseAndProcessCommand : Line exceeds %d command limit", MAX_COMMANDS);
-            script.SkipToEOL();
-            break;
-        }
-        Q_strncpyz(args[argc], script.GetToken(false), sizeof(args[argc]));
-        argv[argc] = args[argc];
-        argc++;
-    }
-
+    argc = command.argv.NumObjects();
     assert(argc > 0);
 
     if (argc <= 0) {
         return;
     }
 
-    event = new Event(args[0], argc - 1);
+    if (argc > MAX_COMMANDS) {
+        argc = MAX_COMMANDS;
+    }
+
+    for (i = 0; i < argc; i++) {
+        argv[i] = command.argv.ObjectAt(i + 1).c_str();
+    }
+
+    event = new Event(argv[0], argc - 1);
     event->AddTokens(argc - 1, &argv[1]);
     target->ProcessEvent(event);
 }
@@ -381,32 +433,30 @@ void State::ParseAndProcessCommand(str command, Entity *target)
 void State::ProcessEntryCommands(Entity *target)
 {
     int i, count;
-    str command;
 
     assert(target);
     if (!target) {
         return;
     }
 
-    count = entryCommands.NumObjects();
+    count = resolvedEntryCommands.NumObjects();
     for (i = 1; i <= count; i++) {
-        ParseAndProcessCommand(entryCommands.ObjectAt(i), target);
+        ParseAndProcessCommand(resolvedEntryCommands.ObjectAt(i), target);
     }
 }
 
 void State::ProcessExitCommands(Entity *target)
 {
     int i, count;
-    str command;
 
     assert(target);
     if (!target) {
         return;
     }
 
-    count = exitCommands.NumObjects();
+    count = resolvedExitCommands.NumObjects();
     for (i = 1; i <= count; i++) {
-        ParseAndProcessCommand(exitCommands.ObjectAt(i), target);
+        ParseAndProcessCommand(resolvedExitCommands.ObjectAt(i), target);
     }
 }
 
@@ -450,7 +500,6 @@ State *State::Evaluate(Entity& ent, Container<Conditional *> *sent_conditionals)
 {
     int         i;
     Expression *exp;
-    State      *state;
     int         index;
 
     for (i = 1; i <= condition_indexes.NumObjects(); i++) {
@@ -462,8 +511,7 @@ State *State::Evaluate(Entity& ent, Container<Conditional *> *sent_conditionals)
     for (i = 1; i <= states.NumObjects(); i++) {
         exp = &states.ObjectAt(i);
         if (exp->getResult(*this, ent, sent_conditionals)) {
-            state = statemap.FindState(exp->getValue());
-            return state;
+            return exp->getTargetState();
         }
     }
 
@@ -576,18 +624,26 @@ int State::addCondition(const char *name, Script& script)
 void State::CheckStates(void)
 {
     const char *value;
+    State      *target;
     int         i;
 
-    if (!statemap.FindState(nextState.c_str())) {
+    nextStatePtr = statemap.FindState(nextState.c_str());
+    if (!nextStatePtr) {
         gi.Error(ERR_DROP, "Unknown next state '%s' referenced in state '%s'.\n", nextState.c_str(), getName());
     }
 
     for (i = 1; i <= states.NumObjects(); i++) {
-        value = states.ObjectAt(i).getValue();
-        if (!statemap.FindState(value)) {
+        Expression& exp = states.ObjectAt(i);
+
+        value  = exp.getValue();
+        target = statemap.FindState(value);
+        if (!target) {
             gi.Error(ERR_DROP, "Unknown state '%s' referenced in state '%s'.\n", value, getName());
         }
+        exp.setTargetState(target);
     }
+
+    ResolveCommands();
 }
 
 void State::GetLegAnims(Container<const char *> *c)
@@ -639,11 +695,12 @@ State::State(const char *statename, Script& script, StateMap& map)
 {
     str cmd;
 
-    name         = statename;
-    nextState    = statename;
-    movetype     = DEFAULT_MOVETYPE;
-    cameratype   = DEFAULT_CAMERA;
-    behaviorName = "idle";
+    name          = statename;
+    nextState     = statename;
+    nextStatePtr  = NULL;
+    movetype      = DEFAULT_MOVETYPE;
+    cameratype    = DEFAULT_CAMERA;
+    behaviorName  = "idle";
 
     minTime = -1.0;
     maxTime = -1.0;
@@ -867,7 +924,6 @@ StateMap *GetStatemap(
     qboolean           found = false;
     Conditional       *new_conditional;
     Conditional       *old_conditional;
-    Condition<Class>  *cond;
 
     for (i = 1; i <= cached_statemaps.NumObjects(); i++) {
         cache = &cached_statemaps.ObjectAt(i);
@@ -895,15 +951,13 @@ StateMap *GetStatemap(
         cache = &new_cache;
     }
 
-    // Copy conditionals over
+    // Copy conditionals over — reuse already-resolved handler, skip name lookup
 
     if (!cache_only) {
         for (i = 1; i <= cache->conditionals->NumObjects(); i++) {
             old_conditional = cache->conditionals->ObjectAt(i);
 
-            cond = cache->statemap->getCondition(old_conditional->condition.name);
-
-            new_conditional = new Conditional(*cond);
+            new_conditional = new Conditional(old_conditional->condition);
 
             for (j = 1; j <= old_conditional->parmList.NumObjects(); j++) {
                 new_conditional->parmList.AddObject(old_conditional->parmList.ObjectAt(j));

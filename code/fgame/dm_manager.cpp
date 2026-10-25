@@ -686,6 +686,10 @@ DM_Manager::DM_Manager()
     m_bAllowAlliedRespawn  = true;
     m_bRoundActive         = false;
     m_iTotalMapTime        = 0;
+
+    m_iFFAScoreCacheFrame   = -1;
+    m_FFAScoreCacheString[0] = 0;
+    m_iFFAScoreCacheEntries = 0;
 }
 
 DM_Manager::~DM_Manager() {}
@@ -699,6 +703,9 @@ void DM_Manager::Reset(void)
 
     m_players.ClearObjectList();
     m_teams.ClearObjectList();
+
+    // level.framenum restarts with the next level
+    m_iFFAScoreCacheFrame = -1;
 
     gi.cvar_set("g_scoreboardpicover", "");
 
@@ -902,6 +909,18 @@ void DM_Manager::Score(Player *player)
 
     assert(player);
 
+    // The FFA score string is the same for every requester, so reuse it for
+    // the rest of the frame. Score requests arrive between frames, so a
+    // reused string can miss a connect/disconnect/rename processed since,
+    // i.e. it can be at most one 50 ms frame older than a fresh build;
+    // clients only refresh scores every 2 s anyway, so this is not visible.
+    if (g_gametype->integer == GT_FFA && m_iFFAScoreCacheFrame == level.framenum) {
+        gi.SendServerCommand(
+            player->client->ps.clientNum, "scores %i %s", m_iFFAScoreCacheEntries, m_FFAScoreCacheString
+        );
+        return;
+    }
+
     scoreString[0] = 0;
     scoreLength    = 0;
     scoreEntries   = 0;
@@ -1036,6 +1055,12 @@ void DM_Manager::Score(Player *player)
 
         BuildTeamInfo(&m_team_spectator);
         BuildPlayerTeamInfo(&m_team_spectator, iPlayerList);
+    }
+
+    if (g_gametype->integer == GT_FFA) {
+        m_iFFAScoreCacheFrame   = level.framenum;
+        m_iFFAScoreCacheEntries = scoreEntries;
+        Q_strncpyz(m_FFAScoreCacheString, scoreString, sizeof(m_FFAScoreCacheString));
     }
 
     // send the info to the client

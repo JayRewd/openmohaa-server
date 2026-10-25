@@ -26,11 +26,15 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #include "playerbot.h"
 #include "regularbot.h"
 #include "g_bot.h"
+#include "level.h"
 
 static saved_bot_t *saved_bots     = NULL;
 static unsigned int num_saved_bots = 0;
 static unsigned int botId          = 0;
 static unsigned int regularBotId   = 0;
+// At most one regular-bot add or remove per interval (roomba path unchanged).
+static int          nextRegularBotChangeTime = 0;
+static const int    REGULAR_BOT_CHANGE_INTERVAL = 250;
 
 Container<str> alliedModelList;
 Container<str> germanModelList;
@@ -724,7 +728,14 @@ static unsigned int G_GetNumBotsToSpawn()
 
 static unsigned int G_GetNumRegularBotsToSpawn()
 {
-    const int capacity = Q_max(sv_maxregularbots->integer, 0);
+    // Bots join one per interval, so the change below stays "modified" for
+    // the whole fill; warn about the capacity limit once per change.
+    static qboolean fillLimitReported = qfalse;
+    const int       capacity          = Q_max(sv_maxregularbots->integer, 0);
+
+    if (!sv_regularbot_minplayers->modified) {
+        fillLimitReported = qfalse;
+    }
 
     // Without capacity no regular bot can run, so skip the per-frame count
     // unless a changed sv_regularbot_minplayers still needs reporting below.
@@ -741,7 +752,8 @@ static unsigned int G_GetNumRegularBotsToSpawn()
     const int requested = humans ? Q_max(fillPopulation - realPopulation, 0) : 0;
     const int target    = Q_min(requested, capacity);
 
-    if (requested > capacity && sv_regularbot_minplayers->modified) {
+    if (requested > capacity && sv_regularbot_minplayers->modified && !fillLimitReported) {
+        fillLimitReported = qtrue;
         gi.Printf(
             "REGULARBOT: population fill needs %d regular bot(s), limited to %d by sv_maxregularbots\n",
             requested,
@@ -888,22 +900,31 @@ void G_SpawnBots()
     numRegularBotsToSpawn = G_GetNumRegularBotsToSpawn();
     numSpawnedRegularBots = regularBotControllerManager.getControllers().NumObjects();
 
+    // level.inttime restarts at 0 on every map load and restart
+    if (nextRegularBotChangeTime - level.inttime > REGULAR_BOT_CHANGE_INTERVAL) {
+        nextRegularBotChangeTime = 0;
+    }
+
     if (numRegularBotsToSpawn > numSpawnedRegularBots) {
-        gi.DPrintf(
-            "REGULARBOT: spawning %d bot(s) (target=%d, current=%d)\n",
-            numRegularBotsToSpawn - numSpawnedRegularBots,
-            numRegularBotsToSpawn,
-            numSpawnedRegularBots
-        );
-        G_AddRegularBots(numRegularBotsToSpawn - numSpawnedRegularBots);
+        if (level.inttime >= nextRegularBotChangeTime) {
+            gi.DPrintf(
+                "REGULARBOT: spawning 1 bot (target=%d, current=%d)\n",
+                numRegularBotsToSpawn,
+                numSpawnedRegularBots
+            );
+            G_AddRegularBots(1);
+            nextRegularBotChangeTime = level.inttime + REGULAR_BOT_CHANGE_INTERVAL;
+        }
     } else if (numRegularBotsToSpawn < numSpawnedRegularBots) {
-        gi.DPrintf(
-            "REGULARBOT: removing %d bot(s) (target=%d, current=%d)\n",
-            numSpawnedRegularBots - numRegularBotsToSpawn,
-            numRegularBotsToSpawn,
-            numSpawnedRegularBots
-        );
-        G_RemoveRegularBots(numSpawnedRegularBots - numRegularBotsToSpawn);
+        if (level.inttime >= nextRegularBotChangeTime) {
+            gi.DPrintf(
+                "REGULARBOT: removing 1 bot (target=%d, current=%d)\n",
+                numRegularBotsToSpawn,
+                numSpawnedRegularBots
+            );
+            G_RemoveRegularBots(1);
+            nextRegularBotChangeTime = level.inttime + REGULAR_BOT_CHANGE_INTERVAL;
+        }
     } else {
         sv_regularbot_minplayers->modified = false;
     }

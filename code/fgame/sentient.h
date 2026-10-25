@@ -143,8 +143,6 @@ protected:
 
     virtual void     ArmorDamage(Event *ev);
     virtual qboolean CanBlock(int meansofdeath, qboolean full_block);
-    void             AddBloodSpurt(Vector direction);
-    qboolean         ShouldBleed(int meansofdeath, qboolean dead);
     qboolean         ShouldGib(int meansofdeath, float damage);
     str              GetBloodSpurtName(void);
     str              GetBloodSplatName(void);
@@ -315,7 +313,6 @@ public:
     void         SpawnBloodyGibs(Event *ev);
     void         SetMaxGibs(Event *ev);
     virtual void GetStateAnims(Container<const char *> *c);
-    void         SpawnEffect(str modelname, Vector pos);
 
     bool         IsNewActiveWeapon(void);
     Weapon      *GetNewActiveWeapon(void);
