@@ -756,8 +756,68 @@ int EntityDistCheck(const vec3_t origin, const vec3_t forward, const gentity_t* 
 SV_AddEntitiesVisibleFromPoint
 ===============
 */
+/*
+===============
+Snapshot entity pre-pass
+
+Within one SV_SendClientMessages pass no game code runs, so the checks of
+SV_AddEntitiesVisibleFromPoint that do not depend on the client give the
+same answer for every client. The first snapshot built in the pass collects
+the entities that survive them (in entity order) and marks every in-use
+entity SVF_SENT, exactly when the full loop would have; later snapshots in
+the pass walk only that list. Snapshots built elsewhere use the full loop.
+===============
+*/
+static qboolean	snapshotListActive;		// inside SV_SendClientMessages
+static qboolean	snapshotListBuilt;
+static int		snapshotListCount;
+static int		snapshotList[MAX_GENTITIES];
+
+// Called when a pass may have been cut short (an error drop longjmps out of
+// SV_SendClientMessages) so later snapshots never walk a stale list.
+void SV_SnapshotListReset( void ) {
+	snapshotListActive = qfalse;
+	snapshotListBuilt = qfalse;
+}
+
+static void SV_BuildSnapshotEntityList( void ) {
+	gentity_t	*ent;
+	int			e;
+
+	snapshotListCount = 0;
+	for ( e = 0 ; e < sv.num_entities ; e++ ) {
+		ent = SV_GentityNum( e );
+
+		if ( !ent->inuse ) {
+			continue;
+		}
+		ent->r.svFlags |= SVF_SENT;
+
+		if ( !ent->r.linked || ( ent->r.svFlags & SVF_NOCLIENT ) ) {
+			continue;
+		}
+
+		if ( ent->s.parent != ENTITYNUM_NONE ) {
+			gentity_t *parentEnt = SV_GentityNum( ent->s.parent );
+
+			if ( parentEnt && parentEnt->r.svFlags & SVF_NOCLIENT ) {
+				continue;
+			}
+		} else if ( !( ent->s.renderfx & RF_SKYORIGIN )
+			&& !( ent->r.svFlags & ( SVF_BROADCAST | SVF_SENDONCE ) )
+			&& !( ent->r.svFlags & SVF_SENDPVS ) && !ent->s.modelindex && !ent->s.loopSound ) {
+			continue;	// nothing to draw: the full loop drops it too
+		}
+
+		snapshotList[snapshotListCount++] = e;
+	}
+	snapshotListBuilt = qtrue;
+}
+
 static void SV_AddEntitiesVisibleFromPoint(const vec3_t origin, clientSnapshot_t* frame, snapshotEntityNumbers_t* eNums, svEntity_t* portalEnt, qboolean portalsky, client_t* client, const vec3_t angles ) {
 	int		e, i;
+	int		k, count;
+	const int	*list;
 	gentity_t *ent;
 	gentity_t *parentEnt;
 	playerState_t *ps;
@@ -800,24 +860,37 @@ static void SV_AddEntitiesVisibleFromPoint(const vec3_t origin, clientSnapshot_t
 
 	c_fullsend = 0;
 
-	for ( e = 0 ; e < sv.num_entities ; e++ ) {
+	list = NULL;
+	count = sv.num_entities;
+	if ( snapshotListActive ) {
+		if ( !snapshotListBuilt ) {
+			SV_BuildSnapshotEntityList();
+		}
+		list = snapshotList;
+		count = snapshotListCount;
+	}
+
+	for ( k = 0 ; k < count ; k++ ) {
+		e = list ? list[k] : k;
 		ent = SV_GentityNum(e);
 
-		// never send unused entities
-		if (!ent->inuse) {
-			continue;
-		}
+		if ( !list ) {
+			// never send unused entities
+			if (!ent->inuse) {
+				continue;
+			}
 
-		// mark the entity as sent
-		ent->r.svFlags |= SVF_SENT;
+			// mark the entity as sent
+			ent->r.svFlags |= SVF_SENT;
 
-		// never send entities that aren't linked in
-		if ( !ent->r.linked ) {
-			continue;
-		}
-		// entities can be flagged to explicitly not be sent to the client
-		if ( ent->r.svFlags & SVF_NOCLIENT ) {
-			continue;
+			// never send entities that aren't linked in
+			if ( !ent->r.linked ) {
+				continue;
+			}
+			// entities can be flagged to explicitly not be sent to the client
+			if ( ent->r.svFlags & SVF_NOCLIENT ) {
+				continue;
+			}
 		}
 		// entities can be flagged to be sent to only one client
 		if ( ent->r.svFlags & SVF_SINGLECLIENT ) {
@@ -1449,6 +1522,8 @@ void SV_SendClientMessages(void)
 	client_t		*c;
 
 	SV_DeltaCacheNewFrame();
+	snapshotListActive = qtrue;
+	snapshotListBuilt = qfalse;
 
 	// send a message to each connected client
 	for(i=0; i < sv_maxclients->integer; i++)
@@ -1495,6 +1570,8 @@ void SV_SendClientMessages(void)
 		c->lastSnapshotTime = svs.time;
 		c->rateDelayed = qfalse;
     }
+
+	snapshotListActive = qfalse;
 }
 
 qboolean SV_IsValidSnapshotClient(client_t* client) {

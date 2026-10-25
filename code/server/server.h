@@ -598,6 +598,7 @@ qboolean	SV_inPVS (const vec3_t p1, const vec3_t p2);
 // su44: MoHAA game -> cgame messages
 void SV_WriteCGMToClient (client_t *client, msg_t *msg);
 void SV_InitAllCGMessages ();
+void SV_SnapshotListReset( void );
 
 //
 // sv_snd.c

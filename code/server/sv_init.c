@@ -708,6 +708,8 @@ void SV_SpawnServer( const char *server, qboolean loadgame, qboolean restart, qb
 	qboolean	keep_scripts;
 	const char	*p;
 
+	SV_SnapshotListReset();
+
 	keep_scripts = restart;
 
 	Com_Printf ("------ Server Initialization ------\n");
@@ -1332,6 +1334,8 @@ before Sys_Quit or SyScriptError
 ================
 */
 void SV_Shutdown( const char *finalmsg ) {
+	SV_SnapshotListReset();
+
 	if ( !com_sv_running || !com_sv_running->integer ) {
 		return;
 	}
