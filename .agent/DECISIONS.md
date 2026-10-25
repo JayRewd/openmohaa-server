@@ -87,3 +87,33 @@ Claude is author and committer of every commit after `a2f3401`, dated the day
 of the rewrite in history order. The same pass folded the owner's roomba
 target fix into the roomba commit, put the upstream `Info_RemoveKey` fix
 first, and left `main` as the only branch; `dev` still follows its commit.
+
+## D-011: Server packet-demo format (OMSD v1)
+
+True server demos capture raw inbound UDP datagrams for bit-identical
+`SV_PacketEvent` replay. Format is little-endian binary under
+`svdemos/*.svd_1` (HomeData), magic `OMSD`, version 1. Never store
+`netadr_t`/IP; identify peers by demo slot, qport, and player name only.
+Event types are fixed: `END=0`, `PACKET=1`, `TIME=2`, `CONSOLE=3`,
+`OUTBOUND=4` (type reserved in v1 for later closed-loop; inbound writer only
+in Step 1). Capture stays default-off with a cheap recording-flag check on the
+hot path (D-002). Buffered FS writes, not per-packet `FS_Write`.
+
+## D-012: Optimizations must not change what stock clients receive
+
+Rejected in the 2026-10-24 review because players could notice: hiding
+`dontdraw` explosion entities (several stock explosion TIKIs draw their
+effects client-side), discarding CGMs queued for loading clients, dropping
+clients after repeated gamestate resends, and slowing SMG-bot reactions.
+Prefer skipping server work whose only outputs are unused (no Actors,
+`sv_netoptimize` off) or caching results that are identical within a frame.
+
+## D-013: Fight-load optimizations are exact equivalences, proven by checks
+
+Each change returns a result the old code would return in every case
+(cached answers with invalidation, early-outs whose output equals the full
+path). A temporary check build runs old and new side by side under a bot
+fight and aborts on any difference. The `SV_Trace` entity-box bound failed
+that check (deep traces can hit outside an entity's link box), so traces
+stay stock. Idle-time costs that would shift frame timing (the main loop's
+last-millisecond spin) are left alone.
