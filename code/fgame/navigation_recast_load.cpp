@@ -1108,6 +1108,13 @@ void NavigationMap::LoadWorldMap(const char *mapname)
     gi.Printf("Recast navigation mesh(es) generated in %.03f seconds\n", (float)((end - start) / 1000.0));
 
     validNavigation = true;
+
+    // The parsed BSP triangles are only read by the debug drawing (a cache
+    // hit never fills them either), so free them outside developer mode.
+    if (!developer || !developer->integer) {
+        navigationData.navMap.GetWorldMap().surfaces.FreeObjectList();
+        navigationData.navMap.subModels.FreeObjectList();
+    }
 }
 
 void NavigationMap::CleanUp(qboolean samemap)

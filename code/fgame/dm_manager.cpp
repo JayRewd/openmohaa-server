@@ -1195,25 +1195,29 @@ void DM_Manager::InitGame(void)
 
 bool DM_Manager::CheckEndMatch()
 {
+    // The cvars already exist, so Cvar_Get only hands back the same
+    // pointer; look them up again only after clamping changed them.
     if (fraglimit) {
         if (fraglimit->integer < 0) {
             gi.cvar_set("fraglimit", "0");
+            fraglimit = gi.Cvar_Get("fraglimit", "0", 0);
         }
         if (fraglimit->integer > 10000) {
             gi.cvar_set("fraglimit", "10000");
+            fraglimit = gi.Cvar_Get("fraglimit", "0", 0);
         }
-        fraglimit = gi.Cvar_Get("fraglimit", "0", 0);
     }
 
     if (timelimit) {
         if (timelimit->integer < 0) {
             gi.cvar_set("timelimit", "0");
+            timelimit = gi.Cvar_Get("timelimit", "0", 0);
         }
         // 180 minutes maximum
         if (timelimit->integer > 10800) {
             gi.cvar_set("timelimit", "10800");
+            timelimit = gi.Cvar_Get("timelimit", "0", 0);
         }
-        timelimit = gi.Cvar_Get("timelimit", "0", 0);
     }
 
     if (!m_bRoundBasedGame

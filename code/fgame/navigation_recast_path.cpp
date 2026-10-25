@@ -65,6 +65,22 @@ static bool BelowMinTravel(const vec3_t recastPos, const Vector& start, float mi
     return (gamePos - start).lengthXYSquared() < Square(minTravel);
 }
 
+// The base filter is set only when the navmesh loads, from fixed values, so
+// one prepared copy per ladder setting equals a fresh QueryFilterForPath.
+static const dtQueryFilter *SharedPathFilter(bool allowLadders)
+{
+    static const dtQueryFilter *base;
+    static dtQueryFilter        filters[2];
+    const dtQueryFilter        *current = navigationMap.GetQueryFilter();
+
+    if (current != base) {
+        filters[0] = QueryFilterForPath(false);
+        filters[1] = QueryFilterForPath(true);
+        base       = current;
+    }
+    return &filters[allowLadders ? 1 : 0];
+}
+
 struct DetourData {
 public:
     dtPathCorridor corridor;
@@ -112,14 +128,12 @@ void RecastPather::FindPath(const Vector& start, const Vector& end, const PathSe
     Vector        recastStart, recastEnd;
     dtPolyRef     startRef, endRef;
     vec3_t        startPt, endPt;
-    dtQueryFilter pathFilter;
 
     allowLadders = parameters.allowLadders;
     lastorg = start;
     ResetPosition(start);
 
-    pathFilter                  = QueryFilterForPath(allowLadders);
-    const dtQueryFilter *filter = &pathFilter;
+    const dtQueryFilter *filter = SharedPathFilter(allowLadders);
 
     ConvertGameToRecastCoord(start, recastStart);
     ConvertGameToRecastCoord(end, recastEnd);
@@ -162,14 +176,12 @@ void RecastPather::FindPathNear(
     Vector        recastStart, recastEnd;
     dtPolyRef     startRef, endRef;
     vec3_t        startPt, endPt;
-    dtQueryFilter pathFilter;
 
     allowLadders = parameters.allowLadders;
     lastorg = start;
     ResetPosition(start);
 
-    pathFilter                  = QueryFilterForPath(allowLadders);
-    const dtQueryFilter *filter = &pathFilter;
+    const dtQueryFilter *filter = SharedPathFilter(allowLadders);
 
     ConvertGameToRecastCoord(start, recastStart);
     ConvertGameToRecastCoord(end, recastEnd);
@@ -235,7 +247,6 @@ void RecastPather::FindPathAway(
     Vector        dirNormalized;
     dtPolyRef     startRef, endRef;
     vec3_t        startPt, endPt;
-    dtQueryFilter pathFilter;
     float          startAngle;
     float          startPitch;
     int            i, j;
@@ -245,8 +256,7 @@ void RecastPather::FindPathAway(
     lastorg = start;
     ResetPosition(start);
 
-    pathFilter                  = QueryFilterForPath(allowLadders);
-    const dtQueryFilter *filter = &pathFilter;
+    const dtQueryFilter *filter = SharedPathFilter(allowLadders);
 
     startAngle = DEG2RAD(preferredDir.toYaw());
     startPitch = DEG2RAD(preferredDir.toPitch());
@@ -337,8 +347,7 @@ void RecastPather::FindPathAway(
 bool RecastPather::TestPath(const Vector& start, const Vector& end, const PathSearchParameter& parameters)
 {
     Vector        recastStart, recastEnd;
-    dtQueryFilter pathFilter = QueryFilterForPath(parameters.allowLadders);
-    const dtQueryFilter *filter = &pathFilter;
+    const dtQueryFilter *filter = SharedPathFilter(parameters.allowLadders);
     dtStatus status;
 
     ConvertGameToRecastCoord(start, recastStart);
