@@ -533,7 +533,13 @@ void L_ClearEventList()
     EventQueueNode *node = Event::EventQueue.next, *tmp;
 
     while (node != &Event::EventQueue) {
+        Listener *obj = node->GetSourceObject();
+
         tmp = node->next;
+
+        if (obj) {
+            obj->m_iPendingEvents--;
+        }
 
         delete node->event;
         delete node;
@@ -549,6 +555,19 @@ void L_ClearEventList()
     AnimationEvent_allocator.FreeAll();
     ConsoleEvent_allocator.FreeAll();
 #endif
+}
+
+void L_RecountPendingEvents()
+{
+    EventQueueNode *node;
+
+    for (node = Event::EventQueue.next; node != &Event::EventQueue; node = node->next) {
+        Listener *obj = node->GetSourceObject();
+
+        if (obj) {
+            obj->m_iPendingEvents++;
+        }
+    }
 }
 
 bool L_EventSystemStarted(void)
@@ -597,6 +616,7 @@ void L_ProcessPendingEvents()
 
         // the event is removed from its list
         LL_Remove(node, next, prev);
+        obj->m_iPendingEvents--;
         //gi.DPrintf2("Event: %s\n", node->event->getName().c_str());
 
         // ProcessEvent will dispose of this event when it is done
@@ -3006,6 +3026,8 @@ Listener
 */
 Listener::Listener()
 {
+    m_iPendingEvents = 0;
+
 #ifdef WITH_SCRIPT_ENGINE
 
     m_EndList = NULL;
@@ -3126,6 +3148,10 @@ void Listener::CancelEventsOfType(Event *ev)
     EventQueueNode *next;
     int             eventnum;
 
+    if (m_iPendingEvents == 0) {
+        return;
+    }
+
     node = Event::EventQueue.next;
 
     eventnum = ev->eventnum;
@@ -3133,6 +3159,7 @@ void Listener::CancelEventsOfType(Event *ev)
         next = node->next;
         if ((node->GetSourceObject() == this) && (node->event->eventnum == eventnum)) {
             LL_Remove(node, next, prev);
+            m_iPendingEvents--;
             delete node->event;
             delete node;
         }
@@ -3160,12 +3187,17 @@ void Listener::CancelFlaggedEvents(int flags)
     EventQueueNode *node;
     EventQueueNode *next;
 
+    if (m_iPendingEvents == 0) {
+        return;
+    }
+
     node = Event::EventQueue.next;
 
     while (node != &Event::EventQueue) {
         next = node->next;
         if ((node->GetSourceObject() == this) && (node->flags & flags)) {
             LL_Remove(node, next, prev);
+            m_iPendingEvents--;
             // Added in OPM
             //  Original doesn't delete the posted Event
             //  which would cause a memory leak
@@ -3187,12 +3219,17 @@ void Listener::CancelPendingEvents(void)
     EventQueueNode *node;
     EventQueueNode *next;
 
+    if (m_iPendingEvents == 0) {
+        return;
+    }
+
     node = Event::EventQueue.next;
 
     while (node != &Event::EventQueue) {
         next = node->next;
         if (node->GetSourceObject() == this) {
             LL_Remove(node, next, prev);
+            m_iPendingEvents--;
             delete node->event;
             delete node;
         }
@@ -3209,6 +3246,10 @@ qboolean Listener::EventPending(Event& ev)
 {
     EventQueueNode *event;
     int             eventnum;
+
+    if (m_iPendingEvents == 0) {
+        return false;
+    }
 
     event = Event::EventQueue.next;
 
@@ -3274,6 +3315,7 @@ EventQueueNode *Listener::PostEventInternal(Event *ev, float delay, int flags)
 #endif
 
     LL_Add(i, node, next, prev);
+    m_iPendingEvents++;
 
     return node;
 }
@@ -3537,6 +3579,10 @@ qboolean Listener::ProcessPendingEvents(void)
 
     processedEvents = false;
 
+    if (m_iPendingEvents == 0) {
+        return false;
+    }
+
     t = EVENT_msec;
 
     Listener::ProcessingEvents = true;
@@ -3559,6 +3605,7 @@ qboolean Listener::ProcessPendingEvents(void)
         } else {
             // the event is removed from its list and temporarily added to the active list
             LL_Remove(event, next, prev);
+            m_iPendingEvents--;
 
             // ProcessEvent will dispose of this event when it is done
             obj->ProcessEvent(event->event);

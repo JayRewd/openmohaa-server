@@ -239,6 +239,7 @@ const char *G_AIEventStringFromType(int iType);
 float       G_AIEventRadius(int iType);
 void        G_BroadcastAIEvent(Entity *originator, Vector origin, char *pszType);
 void        G_BroadcastAIEvent(Entity *originator, Vector origin, int iType, float radius);
+qboolean    G_AnyActorExists(void);
 
 void CloneEntity(Entity *dest, Entity *src);
 void G_ArchiveEdict(Archiver& arc, gentity_t *edict);

@@ -3541,9 +3541,7 @@ void Player::DoUse(Event *ev)
 void Player::TouchStuff(pmove_t *pm)
 {
     gentity_t *other;
-    Event     *event;
     int        i;
-    int        j;
 
     //
     // clear out any conditionals that are controlled by touching
@@ -3558,16 +3556,9 @@ void Player::TouchStuff(pmove_t *pm)
     for (i = 0; i < pm->numtouch; i++) {
         other = &g_entities[pm->touchents[i]];
 
-        for (j = 0; j < i; j++) {
-            gentity_t *ge = &g_entities[j];
-
-            if (ge == other) {
-                break;
-            }
-        }
-
-        if (j != i) {
-            // duplicated
+        // Stock skips an entity whose number is below its touch index (the
+        // old loop compared against g_entities[j], not touchents[j]).
+        if (pm->touchents[i] < i) {
             continue;
         }
 
@@ -3576,13 +3567,13 @@ void Player::TouchStuff(pmove_t *pm)
             continue;
         }
 
-        event = new Event(EV_Touch);
-        event->AddEntity(this);
-        other->entity->ProcessEvent(event);
+        Event evOther(EV_Touch);
+        evOther.AddEntity(this);
+        other->entity->ProcessEvent(evOther);
 
-        event = new Event(EV_Touch);
-        event->AddEntity(other->entity);
-        ProcessEvent(event);
+        Event evSelf(EV_Touch);
+        evSelf.AddEntity(other->entity);
+        ProcessEvent(evSelf);
     }
 }
 
@@ -3882,21 +3873,8 @@ static Vector vec_up = Vector(0, 0, 1);
 
 void Player::CheckMoveFlags(void)
 {
-    trace_t trace;
-    Vector  start;
-    Vector  end;
-    float   oldsp;
-    Vector  olddir(oldvelocity.x, oldvelocity.y, 0);
-
-    //
-    // Check if moving forward will cause the player to fall
-    //
-    start = origin + yaw_forward * 52.0f;
-    end   = start;
-    end.z -= STEPSIZE * 2;
-
-    trace   = G_Trace(start, mins, maxs, end, this, MASK_PLAYERSOLID, true, "CheckMoveFlags");
-    canfall = (trace.fraction >= 1.0f);
+    float  oldsp;
+    Vector olddir(oldvelocity.x, oldvelocity.y, 0);
 
     if (!groundentity && !(client->ps.walking)) {
         falling      = true;
@@ -6252,22 +6230,21 @@ void Player::CalcBlend(void)
     client->ps.stats[STAT_ADDFADE] = 0;
     blend[0] = blend[1] = blend[2] = blend[3] = 0;
 
-    // add for contents
-    vieworg = m_vViewPos;
-
-    contents = gi.pointcontents(vieworg, 0);
-
-    if (contents & CONTENTS_SOLID) {
-        // Outside of world
-        //AddBlend( 0.8, 0.5, 0.0, 0.2 );
-    } else if (contents & CONTENTS_LAVA) {
-        AddBlend(level.lava_color[0], level.lava_color[1], level.lava_color[2], level.lava_alpha);
-    } else if (contents & CONTENTS_WATER) {
-        AddBlend(level.water_color[0], level.water_color[1], level.water_color[2], level.water_alpha);
-    }
-
-    // add for damage
+    // Water/lava only feed ps.blend inside the damage_alpha branch today —
+    // skip pointcontents when that blend will not be written.
     if (damage_alpha > 0) {
+        vieworg  = m_vViewPos;
+        contents = gi.pointcontents(vieworg, 0);
+
+        if (contents & CONTENTS_SOLID) {
+            // Outside of world
+            //AddBlend( 0.8, 0.5, 0.0, 0.2 );
+        } else if (contents & CONTENTS_LAVA) {
+            AddBlend(level.lava_color[0], level.lava_color[1], level.lava_color[2], level.lava_alpha);
+        } else if (contents & CONTENTS_WATER) {
+            AddBlend(level.water_color[0], level.water_color[1], level.water_color[2], level.water_alpha);
+        }
+
         AddBlend(damage_blend[0], damage_blend[1], damage_blend[2], damage_alpha);
 
         // drop the damage value
@@ -7328,23 +7305,7 @@ void Player::UpdateStats(void)
         }
 
         if (g_gametype->integer < GT_TEAM) {
-            gentity_t *ent;
-            int        i;
-            int        bestKills = -9999;
-
-            // Get the best player
-            for (i = 0, ent = g_entities; i < game.maxclients; i++, ent++) {
-                if (!ent->inuse || !ent->client || !ent->entity) {
-                    continue;
-                }
-
-                Player *p = (Player *)ent->entity;
-                if (p->GetNumKills() > bestKills) {
-                    bestKills = p->GetNumKills();
-                }
-            }
-
-            client->ps.stats[STAT_HIGHEST_SCORE] = bestKills;
+            client->ps.stats[STAT_HIGHEST_SCORE] = level.highestScore;
         } else {
             if (dmManager.GetTeamAxis()->m_teamwins > dmManager.GetTeamAllies()->m_teamwins) {
                 client->ps.stats[STAT_HIGHEST_SCORE] = dmManager.GetTeamAxis()->m_teamwins;

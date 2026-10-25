@@ -23,6 +23,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #include "qcommon.h"
 
 huffman_t msgHuff;
+static huffCodeTable_t msgHuffCodes;
 
 qboolean msgInit = qfalse;
 
@@ -307,10 +308,9 @@ void MSG_WriteBits( msg_t *msg, int value, int bits ) {
 				msg->overflowed = qtrue;
 				return;
 			}
-			for(i=0;i<nbits;i++) {
-				Huff_putBit((value&1), msg->data, &msg->bit);
-				value = (value>>1);
-			}
+			// same bits as nbits Huff_putBit calls
+			Huff_putBits((unsigned int)value & ((1u << nbits) - 1), nbits, msg->data, &msg->bit);
+			value = (unsigned int)value >> nbits;
 			bits = bits - nbits;
 		}
 		if (bits) {
@@ -318,7 +318,7 @@ void MSG_WriteBits( msg_t *msg, int value, int bits ) {
 #if NET_MESSAGE_PROFILING
 				huffstats[value % ARRAY_LEN(huffstats)]++;
 #endif
-				Huff_offsetTransmit( &msgHuff.compressor, (value & 0xff), msg->data, &msg->bit, msg->maxsize << 3 );
+				Huff_offsetTransmitCode( &msgHuffCodes, &msgHuff.compressor, (value & 0xff), msg->data, &msg->bit, msg->maxsize << 3 );
 				value = (value>>8);
 
 				if ( msg->bit >= msg->maxsize << 3 ) {
@@ -2344,6 +2344,19 @@ void MSG_WriteDeltaEntity( msg_t *msg, struct entityState_s *from, struct entity
 		Com_Error (ERR_FATAL, "MSG_WriteDeltaEntity: Bad entity number: %i", to->number );
 	}
 
+    // Byte-identical states give no field delta in either protocol
+    // (every MSG_DeltaNeeded variant starts with the same memcmp), so skip
+    // the per-field pass; the output is the lc == 0 case below.
+    if (from && !memcmp(from, to, sizeof(*to))) {
+        if (!force) {
+            return;
+        }
+        MSG_WriteEntityNum(msg, to->number);
+        MSG_WriteBits(msg, 0, 1); // not removed
+        MSG_WriteBits(msg, 0, 1); // no delta
+        return;
+    }
+
     entityStateFields = MSG_GetEntityStateFields(numFields);
 
 	lc = 0;
@@ -2661,6 +2674,30 @@ void MSG_WritePackedCoordExtra_ver_15(msg_t* msg, float fromValue, float toValue
 	MSG_WriteDeltaCoordExtra(msg, packedFrom, packedTo);
 }
 
+// Same answer as memcmp(a, b, size) != 0, without a libc call for the
+// common field sizes. Callers only test the result for true/false.
+static inline qboolean MSG_FieldBytesDiffer(const void* a, const void* b, int size)
+{
+	switch (size) {
+	case 4: {
+		uint32_t x, y;
+		memcpy(&x, a, 4);
+		memcpy(&y, b, 4);
+		return x != y;
+	}
+	case 2: {
+		uint16_t x, y;
+		memcpy(&x, a, 2);
+		memcpy(&y, b, 2);
+		return x != y;
+	}
+	case 1:
+		return *(const byte*)a != *(const byte*)b;
+	default:
+		return memcmp(a, b, size) != 0;
+	}
+}
+
 qboolean MSG_DeltaNeeded_ver_15(const void* fromField, const void* toField, int fieldType, int bits, int size)
 {
 	int packedFrom;
@@ -2669,7 +2706,7 @@ qboolean MSG_DeltaNeeded_ver_15(const void* fromField, const void* toField, int 
 	int xoredValue;
 	int i;
 
-	if (!memcmp(fromField, toField, size)) {
+	if (!MSG_FieldBytesDiffer(fromField, toField, size)) {
 		// same values, not needed
 		return qfalse;
 	}
@@ -2918,7 +2955,7 @@ qboolean MSG_DeltaNeeded_ver_6(const void* fromField, const void* toField, int f
 {
 	// Unoptimized in base game
 	// Doesn't compare packed values
-	return memcmp(fromField, toField, size);
+	return MSG_FieldBytesDiffer(fromField, toField, size);
 }
 
 float MSG_ReadPackedAngle(msg_t* msg, int bits) {
@@ -4249,4 +4286,7 @@ void MSG_initHuffman( void ) {
 			Huff_addRef(&msgHuff.decompressor,	(byte)i);			// Do update
 		}
 	}
+
+	// The compressor tree is fixed from here on
+	Huff_BuildCodeTable(&msgHuff.compressor, &msgHuffCodes);
 }

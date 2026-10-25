@@ -174,6 +174,7 @@ private:
     };
 
     str                    value;
+    State                 *targetState;
     Container<condition_t> conditions;
 
 public:
@@ -185,13 +186,16 @@ public:
 
     bool        getResult(State& state, Entity& ent, Container<Conditional *> *sent_conditionals);
     const char *getValue(void);
+    State      *getTargetState(void);
+    void        setTargetState(State *state);
 };
 
 inline void Expression::operator=(const Expression& exp)
 {
     int i;
 
-    value = exp.value;
+    value       = exp.value;
+    targetState = exp.targetState;
 
     conditions.FreeObjectList();
     for (i = 1; i <= exp.conditions.NumObjects(); i++) {
@@ -204,6 +208,23 @@ inline const char *Expression::getValue(void)
     return value.c_str();
 }
 
+inline State *Expression::getTargetState(void)
+{
+    return targetState;
+}
+
+inline void Expression::setTargetState(State *state)
+{
+    targetState = state;
+}
+
+// Pretokenized entry/exit command (argv[0] is the event name)
+class StateCommand
+{
+public:
+    Container<str> argv;
+};
+
 class State : public Class
 {
 private:
@@ -214,6 +235,7 @@ private:
     str name;
 
     str           nextState;
+    State        *nextStatePtr;
     movecontrol_t movetype;
     cameratype_t  cameratype;
 
@@ -227,9 +249,11 @@ private:
     Container<Expression> m_actionAnims;
     int                   m_iActionAnimType;
 
-    Container<Expression> states;
-    Container<str>        entryCommands;
-    Container<str>        exitCommands;
+    Container<Expression>   states;
+    Container<str>          entryCommands;
+    Container<str>          exitCommands;
+    Container<StateCommand> resolvedEntryCommands;
+    Container<StateCommand> resolvedExitCommands;
 
     void readNextState(Script& script);
     void readMoveType(Script& script);
@@ -241,7 +265,8 @@ private:
     void readStates(Script& script);
     void readCommands(Script& script, Container<str>& container);
 
-    void ParseAndProcessCommand(str command, Entity *target);
+    void ResolveCommands(void);
+    void ParseAndProcessCommand(const StateCommand& command, Entity *target);
 
 public:
     State(const char *name, Script& script, StateMap& map);
@@ -320,7 +345,7 @@ inline const char *State::getName(void)
 
 inline State *State::getNextState(void)
 {
-    return statemap.FindState(nextState.c_str());
+    return nextStatePtr;
 }
 
 inline movecontrol_t State::getMoveType(void)

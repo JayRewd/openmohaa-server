@@ -37,7 +37,6 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #include "inventoryitem.h"
 #include "player.h"
 #include "actor.h"
-#include "decals.h"
 #include "g_spawn.h"
 #include "object.h"
 #include "../corepp/tiki.h"
@@ -1322,19 +1321,6 @@ qboolean Sentient::DoGib(int meansofdeath, Entity *inflictor)
     return false;
 }
 
-void Sentient::SpawnEffect(str modelname, Vector pos)
-{
-    Animate *block;
-
-    block = new Animate;
-    block->setModel(modelname);
-    block->setOrigin(pos);
-    block->setSolidType(SOLID_NOT);
-    block->setMoveType(MOVETYPE_NONE);
-    block->NewAnim("idle");
-    block->PostEvent(EV_Remove, 1);
-}
-
 int Sentient::CheckHitLocation(int iLocation)
 {
     if (iLocation == 1) {
@@ -1431,43 +1417,6 @@ void Sentient::ArmorDamage(Event *ev)
         return;
     }
 
-    // See if the damage is melee and high enough on actor
-
-    /*
-    if( deadflag )
-    {
-        // Spawn a blood spurt if this model has one
-        if( ShouldBleed( meansofdeath, true ) )
-        {
-            AddBloodSpurt( direction );
-
-            if( ShouldGib( meansofdeath, damage ) )
-                ProcessEvent( EV_Sentient_SpawnBloodyGibs );
-        }
-
-        means_of_death = meansofdeath;
-
-        if( meansofdeath == MOD_FIRE )
-            TryLightOnFire( meansofdeath, attacker );
-
-        // Send pain event
-        event = new Event( EV_Pain );
-        event->AddEntity( attacker );
-        event->AddFloat( damage );
-        event->AddVector( position );
-        event->AddVector( direction );
-        event->AddVector( normal );
-        event->AddInteger( knockback );
-        event->AddInteger( dflags );
-        event->AddInteger( meansofdeath );
-        event->AddInteger( location );
-
-        ProcessEvent( event );
-
-        return;
-    }
-*/
-
     // Do the kick
     if (!(dflags & DAMAGE_NO_KNOCKBACK)) {
         if ((knockback) && (movetype != MOVETYPE_NONE) && (movetype != MOVETYPE_STATIONARY)
@@ -1518,17 +1467,6 @@ void Sentient::ArmorDamage(Event *ev)
 
     // Set means of death
     means_of_death = meansofdeath;
-
-    /*
-    // Spawn a blood spurt if this model has one
-    if( ShouldBleed( meansofdeath, false ) && !blocked )
-    {
-        AddBloodSpurt( direction );
-
-        if( ( this->isSubclassOf( Actor ) || damage > 10 ) && ShouldGib( meansofdeath, damage ) )
-            ProcessEvent( EV_Sentient_SpawnBloodyGibs );
-    }
-*/
 
     if (health <= 0) {
         // See if we can kill this actor or not
@@ -1661,135 +1599,6 @@ qboolean Sentient::CanBlock(int meansofdeath, qboolean full_block)
 
     return true;
 }
-
-void Sentient::AddBloodSpurt(Vector direction)
-{
-    Entity *blood;
-    Vector  dir;
-    Event  *event;
-    str     blood_splat_name;
-    float   blood_splat_size;
-    float   length;
-    trace_t trace;
-    float   scale;
-
-    if (!com_blood->integer) {
-        return;
-    }
-
-    next_bleed_time = level.time + .5;
-
-    // Calculate a good scale for the blood
-
-    if (mass < 50) {
-        scale = .5;
-    } else if (mass > 300) {
-        scale = 1.5;
-    } else if (mass >= 200) {
-        scale = mass / 200.0;
-    } else {
-        scale = .5 + (mass - 50) / 300;
-    }
-
-    // Add blood spurt
-
-    blood = new Animate;
-    blood->setModel(blood_model);
-
-    dir[0]        = -direction[0];
-    dir[1]        = -direction[1];
-    dir[2]        = -direction[2];
-    blood->angles = dir.toAngles();
-    blood->setAngles(blood->angles);
-
-    blood->setOrigin(centroid);
-    blood->origin.copyTo(blood->edict->s.origin2);
-    blood->setSolidType(SOLID_NOT);
-    blood->setScale(scale);
-
-    event = new Event(EV_Remove);
-    blood->PostEvent(event, 1);
-
-    // Add blood splats near feet
-
-    blood_splat_name = GetBloodSplatName();
-    blood_splat_size = GetBloodSplatSize();
-
-    if (blood_splat_name.length() && G_Random() < 0.5) {
-        dir = origin - centroid;
-        dir.z -= 50;
-        dir.x += G_CRandom(20);
-        dir.y += G_CRandom(20);
-
-        length = dir.length();
-
-        dir.normalize();
-
-        dir = dir * (length + 10);
-
-        trace = G_Trace(centroid, vec_zero, vec_zero, centroid + dir, NULL, MASK_DEADSOLID, false, "AddBloodSpurt");
-
-        if (trace.fraction < 1) {
-            Decal *decal = new Decal;
-            decal->setShader(blood_splat_name);
-            decal->setOrigin(Vector(trace.endpos) + (Vector(trace.plane.normal) * 0.2f));
-            decal->setDirection(trace.plane.normal);
-            decal->setOrientation("random");
-            decal->setRadius(blood_splat_size + G_Random(blood_splat_size));
-        }
-    }
-}
-
-qboolean Sentient::ShouldBleed(int meansofdeath, qboolean dead)
-{
-    // Make sure we have a blood model
-
-    if (!blood_model.length()) {
-        return false;
-    }
-
-    // See if we can bleed now based on means of death
-
-    switch (meansofdeath) {
-        // Sometimes bleed (based on time)
-
-    case MOD_BULLET:
-    case MOD_CRUSH_EVERY_FRAME:
-    case MOD_ELECTRICWATER:
-
-        if (next_bleed_time > level.time) {
-            return false;
-        }
-
-        break;
-
-        // Sometimes bleed (based on chance)
-
-    case MOD_SHOTGUN:
-
-        if (G_Random() > 0.1) {
-            return false;
-        }
-
-        break;
-
-        // Never bleed
-
-    case MOD_SLIME:
-    case MOD_LAVA:
-    case MOD_FIRE:
-    case MOD_FLASHBANG:
-    case MOD_ON_FIRE:
-    case MOD_FALLING:
-        return false;
-    }
-
-    // Always bleed by default
-
-    return true;
-}
-
-// ShouldGib assumes that ShouldBleed has already been called
 
 qboolean Sentient::ShouldGib(int meansofdeath, float damage)
 {
@@ -3081,6 +2890,16 @@ void Sentient::FootstepMain(trace_t *trace, int iRunning, int iEquipment)
     vec3_t vPos;
     vec3_t midlegs;
     str    sSoundName;
+
+    if (g_gametype->integer != GT_SINGLE_PLAYER && !sv_netoptimize->integer) {
+        // Both PlayNonPvsSound calls below return at once in this case, so
+        // the only lasting effect is the equipment roll; keep it so the
+        // rand() stream (bullet spread uses it too) matches stock.
+        if (iEquipment) {
+            (void)random(); // stock's `random() < 0.3` equipment roll
+        }
+        return;
+    }
 
     VectorCopy(trace->endpos, vPos);
     sSoundName = "snd_step_";

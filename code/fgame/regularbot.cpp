@@ -358,25 +358,16 @@ void RegularBotController::UpdateNavigation()
         return;
     }
 
-    const float firstYaw = G_Random(360.0f);
+    // Wander inside the bot's connected nav region via random circle samples
+    // (avoids multi-candidate FindPathAway A* storms toward unreachable islands).
     for (int attempt = 0; attempt < 4; attempt++) {
-        Vector direction;
-        Vector(0.0f, firstYaw + attempt * 90.0f, 0.0f).AngleVectorsLeft(&direction);
-
-        if (movement.AvoidPath(
-                controlledEnt->origin - direction * 64.0f,
-                768.0f,
-                direction,
-                NULL,
-                0.0f,
-                320.0f
-            )) {
+        if (movement.Wander(768.0f, 320.0f)) {
             m_iNextNavigationRetryTime = 0;
             return;
         }
     }
 
-    // Avoid retrying four failed path searches every server frame while still
+    // Avoid retrying failed wander searches every server frame while still
     // keeping an isolated bot's visible stop short.
     m_iNextNavigationRetryTime = level.inttime + 200;
 }

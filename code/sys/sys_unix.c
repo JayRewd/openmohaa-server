@@ -519,30 +519,25 @@ char* Sys_MicrosoftStorePath(void)
 Sys_Milliseconds
 ================
 */
-/* base time in seconds, that's our origin
-   timeval:tv_sec is an int:
-   assuming this wraps every 0x7fffffff - ~68 years since the Epoch (1970) - we're safe till 2038 */
-unsigned long sys_timeBase = 0;
-/* current time in ms, using sys_timeBase as origin
-   NOTE: sys_timeBase*1000 + curtime -> ms since the Epoch
-     0x7fffffff ms - ~24 days
-   although timeval:tv_usec is an int, I'm not sure whether it is actually used as an unsigned int
-     (which would affect the wrap period) */
+/* Monotonic milliseconds since first call. int wraps after ~24 days. */
 int curtime;
 int Sys_Milliseconds (void)
 {
-	struct timeval tp;
+	struct timespec tp;
+	static qboolean initialized = qfalse;
+	static int64_t timeBase;
+	int64_t now;
 
-	gettimeofday(&tp, NULL);
+	clock_gettime(CLOCK_MONOTONIC, &tp);
+	now = (int64_t)tp.tv_sec * 1000 + tp.tv_nsec / 1000000;
 
-	if (!sys_timeBase)
+	if (!initialized)
 	{
-		sys_timeBase = tp.tv_sec;
-		return tp.tv_usec/1000;
+		timeBase = now;
+		initialized = qtrue;
 	}
 
-	curtime = (tp.tv_sec - sys_timeBase)*1000 + tp.tv_usec/1000;
-
+	curtime = (int)(now - timeBase);
 	return curtime;
 }
 

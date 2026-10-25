@@ -51,6 +51,133 @@ A normal server packet will look like:
 
 /*
 =============
+Shared delta encodings
+
+MSG_WriteDeltaEntity's bits depend only on (from, to, force, frame time,
+protocol), and each Huffman code is the same at any bit position. Clients
+that delta the same entity between byte-identical states therefore get the
+same bits: encode them once per frame and append the copy. A message close
+to full falls back to the normal call, so overflow behaves as before.
+=============
+*/
+#define DELTA_CACHE_ENTRIES		2048
+#define DELTA_CACHE_ARENA		( 512 * 1024 )
+#define DELTA_SCRATCH_SIZE		4096
+#define DELTA_ROOM_MARGIN		64		// bits kept free so no overflow check can trigger
+
+typedef struct {
+	int				next;
+	qboolean		force;
+	float			frameTime;
+	int				protocol;
+	int				ofs;
+	int				nbits;
+	entityState_t	from;
+	entityState_t	to;
+} deltaCacheEntry_t;
+
+static deltaCacheEntry_t	deltaCache[DELTA_CACHE_ENTRIES];
+static int					deltaCacheCount;
+static int					deltaCacheStamp = 1;	// never 0, so zeroed heads never match
+static int					deltaCacheHead[MAX_GENTITIES];
+static int					deltaCacheHeadStamp[MAX_GENTITIES];
+static byte					deltaCacheArena[DELTA_CACHE_ARENA];
+static int					deltaCacheArenaUsed;
+
+static void SV_DeltaCacheNewFrame( void ) {
+	deltaCacheStamp++;
+	deltaCacheCount = 0;
+	deltaCacheArenaUsed = 0;
+}
+
+static qboolean SV_DeltaHasRoom( const msg_t *msg, int nbits ) {
+	return !msg->overflowed && !msg->oob
+		&& (size_t)msg->bit + (size_t)nbits + DELTA_ROOM_MARGIN < ( msg->maxsize << 3 );
+}
+
+static void SV_AppendDeltaBits( msg_t *msg, const byte *src, int nbits ) {
+	int k = 0;
+
+	if ( nbits <= 0 ) {
+		return;
+	}
+	while ( nbits > 0 ) {
+		int n = nbits < 8 ? nbits : 8;
+
+		Huff_putBits( src[k++], n, msg->data, &msg->bit );
+		nbits -= n;
+	}
+	msg->cursize = ( msg->bit >> 3 ) + 1;
+}
+
+static void SV_WriteDeltaEntityShared( msg_t *msg, entityState_t *from, entityState_t *to, qboolean force ) {
+	static byte			scratchBuf[DELTA_SCRATCH_SIZE];
+	msg_t				scratch;
+	deltaCacheEntry_t	*entry;
+	int					num, i, bytes;
+
+	if ( !from || !to || msg->oob || msg->overflowed ) {
+		MSG_WriteDeltaEntity( msg, from, to, force, sv.frameTime );
+		return;
+	}
+	if ( !force && !memcmp( from, to, sizeof( *to ) ) ) {
+		return;		// MSG_WriteDeltaEntity writes nothing for this case
+	}
+
+	num = to->number;
+	if ( num < 0 || num >= MAX_GENTITIES ) {
+		MSG_WriteDeltaEntity( msg, from, to, force, sv.frameTime );	// stock error path
+		return;
+	}
+
+	if ( deltaCacheHeadStamp[num] == deltaCacheStamp ) {
+		for ( i = deltaCacheHead[num]; i >= 0; i = entry->next ) {
+			entry = &deltaCache[i];
+			if ( entry->force == force && entry->frameTime == sv.frameTime && entry->protocol == com_protocol->integer
+				&& !memcmp( &entry->to, to, sizeof( *to ) ) && !memcmp( &entry->from, from, sizeof( *from ) ) ) {
+				if ( !SV_DeltaHasRoom( msg, entry->nbits ) ) {
+					break;
+				}
+				SV_AppendDeltaBits( msg, deltaCacheArena + entry->ofs, entry->nbits );
+				return;
+			}
+		}
+	}
+
+	// encode once into a scratch message
+	MSG_Init( &scratch, scratchBuf, sizeof( scratchBuf ) );
+	MSG_WriteDeltaEntity( &scratch, from, to, force, sv.frameTime );
+	if ( scratch.overflowed || !SV_DeltaHasRoom( msg, scratch.bit ) ) {
+		MSG_WriteDeltaEntity( msg, from, to, force, sv.frameTime );
+		return;
+	}
+	SV_AppendDeltaBits( msg, scratchBuf, scratch.bit );
+
+	bytes = ( scratch.bit + 7 ) >> 3;
+	if ( deltaCacheCount < DELTA_CACHE_ENTRIES && deltaCacheArenaUsed + bytes <= DELTA_CACHE_ARENA ) {
+		entry = &deltaCache[deltaCacheCount];
+		entry->force = force;
+		entry->frameTime = sv.frameTime;
+		entry->protocol = com_protocol->integer;
+		entry->ofs = deltaCacheArenaUsed;
+		entry->nbits = scratch.bit;
+		entry->from = *from;
+		entry->to = *to;
+		Com_Memcpy( deltaCacheArena + deltaCacheArenaUsed, scratchBuf, bytes );
+		deltaCacheArenaUsed += bytes;
+
+		if ( deltaCacheHeadStamp[num] != deltaCacheStamp ) {
+			deltaCacheHeadStamp[num] = deltaCacheStamp;
+			deltaCacheHead[num] = -1;
+		}
+		entry->next = deltaCacheHead[num];
+		deltaCacheHead[num] = deltaCacheCount;
+		deltaCacheCount++;
+	}
+}
+
+/*
+=============
 SV_EmitPacketEntities
 
 Writes a delta update of an entityState_t list to the message.
@@ -92,7 +219,7 @@ static void SV_EmitPacketEntities( clientSnapshot_t *from, clientSnapshot_t *to,
 			// delta update from old position
 			// because the force parm is qfalse, this will not result
 			// in any bytes being emitted if the entity has not changed at all
-			MSG_WriteDeltaEntity (msg, oldent, newent, qfalse, sv.frameTime);
+			SV_WriteDeltaEntityShared (msg, oldent, newent, qfalse);
 			oldindex++;
 			newindex++;
 			continue;
@@ -100,7 +227,7 @@ static void SV_EmitPacketEntities( clientSnapshot_t *from, clientSnapshot_t *to,
 
 		if ( newnum < oldnum ) {
 			// this is a new entity, send it from the baseline
-			MSG_WriteDeltaEntity (msg, &sv.svEntities[newnum].baseline, newent, qtrue, sv.frameTime);
+			SV_WriteDeltaEntityShared (msg, &sv.svEntities[newnum].baseline, newent, qtrue);
 			newindex++;
 			continue;
 		}
@@ -300,6 +427,43 @@ static int QDECL SV_QsortEntityNumbers( const void *a, const void *b ) {
 	}
 
 	return 1;
+}
+
+/*
+=======================
+SV_SortSnapshotEntities
+
+Same result as the qsort: the list is usually ascending already, except the
+client's own entity, which is added first. Anything else, including a
+duplicate (which the qsort comparator reports), goes through qsort.
+=======================
+*/
+static void SV_SortSnapshotEntities( snapshotEntityNumbers_t *eNums ) {
+	int		*list = eNums->snapshotEntities;
+	int		count = eNums->numSnapshotEntities;
+	int		i, first, pos;
+
+	for ( i = 2; i < count; i++ ) {
+		if ( list[i - 1] >= list[i] ) {
+			qsort( list, count, sizeof( list[0] ), SV_QsortEntityNumbers );
+			return;
+		}
+	}
+
+	if ( count < 2 || list[0] < list[1] ) {
+		return;		// already ascending
+	}
+
+	first = list[0];
+	for ( pos = 1; pos < count && list[pos] < first; pos++ ) {
+	}
+	if ( pos < count && list[pos] == first ) {
+		qsort( list, count, sizeof( list[0] ), SV_QsortEntityNumbers );
+		return;
+	}
+
+	memmove( list, list + 1, ( pos - 1 ) * sizeof( list[0] ) );
+	list[pos - 1] = first;
 }
 
 /*
@@ -592,8 +756,68 @@ int EntityDistCheck(const vec3_t origin, const vec3_t forward, const gentity_t* 
 SV_AddEntitiesVisibleFromPoint
 ===============
 */
+/*
+===============
+Snapshot entity pre-pass
+
+Within one SV_SendClientMessages pass no game code runs, so the checks of
+SV_AddEntitiesVisibleFromPoint that do not depend on the client give the
+same answer for every client. The first snapshot built in the pass collects
+the entities that survive them (in entity order) and marks every in-use
+entity SVF_SENT, exactly when the full loop would have; later snapshots in
+the pass walk only that list. Snapshots built elsewhere use the full loop.
+===============
+*/
+static qboolean	snapshotListActive;		// inside SV_SendClientMessages
+static qboolean	snapshotListBuilt;
+static int		snapshotListCount;
+static int		snapshotList[MAX_GENTITIES];
+
+// Called when a pass may have been cut short (an error drop longjmps out of
+// SV_SendClientMessages) so later snapshots never walk a stale list.
+void SV_SnapshotListReset( void ) {
+	snapshotListActive = qfalse;
+	snapshotListBuilt = qfalse;
+}
+
+static void SV_BuildSnapshotEntityList( void ) {
+	gentity_t	*ent;
+	int			e;
+
+	snapshotListCount = 0;
+	for ( e = 0 ; e < sv.num_entities ; e++ ) {
+		ent = SV_GentityNum( e );
+
+		if ( !ent->inuse ) {
+			continue;
+		}
+		ent->r.svFlags |= SVF_SENT;
+
+		if ( !ent->r.linked || ( ent->r.svFlags & SVF_NOCLIENT ) ) {
+			continue;
+		}
+
+		if ( ent->s.parent != ENTITYNUM_NONE ) {
+			gentity_t *parentEnt = SV_GentityNum( ent->s.parent );
+
+			if ( parentEnt && parentEnt->r.svFlags & SVF_NOCLIENT ) {
+				continue;
+			}
+		} else if ( !( ent->s.renderfx & RF_SKYORIGIN )
+			&& !( ent->r.svFlags & ( SVF_BROADCAST | SVF_SENDONCE ) )
+			&& !( ent->r.svFlags & SVF_SENDPVS ) && !ent->s.modelindex && !ent->s.loopSound ) {
+			continue;	// nothing to draw: the full loop drops it too
+		}
+
+		snapshotList[snapshotListCount++] = e;
+	}
+	snapshotListBuilt = qtrue;
+}
+
 static void SV_AddEntitiesVisibleFromPoint(const vec3_t origin, clientSnapshot_t* frame, snapshotEntityNumbers_t* eNums, svEntity_t* portalEnt, qboolean portalsky, client_t* client, const vec3_t angles ) {
 	int		e, i;
+	int		k, count;
+	const int	*list;
 	gentity_t *ent;
 	gentity_t *parentEnt;
 	playerState_t *ps;
@@ -636,24 +860,37 @@ static void SV_AddEntitiesVisibleFromPoint(const vec3_t origin, clientSnapshot_t
 
 	c_fullsend = 0;
 
-	for ( e = 0 ; e < sv.num_entities ; e++ ) {
+	list = NULL;
+	count = sv.num_entities;
+	if ( snapshotListActive ) {
+		if ( !snapshotListBuilt ) {
+			SV_BuildSnapshotEntityList();
+		}
+		list = snapshotList;
+		count = snapshotListCount;
+	}
+
+	for ( k = 0 ; k < count ; k++ ) {
+		e = list ? list[k] : k;
 		ent = SV_GentityNum(e);
 
-		// never send unused entities
-		if (!ent->inuse) {
-			continue;
-		}
+		if ( !list ) {
+			// never send unused entities
+			if (!ent->inuse) {
+				continue;
+			}
 
-		// mark the entity as sent
-		ent->r.svFlags |= SVF_SENT;
+			// mark the entity as sent
+			ent->r.svFlags |= SVF_SENT;
 
-		// never send entities that aren't linked in
-		if ( !ent->r.linked ) {
-			continue;
-		}
-		// entities can be flagged to explicitly not be sent to the client
-		if ( ent->r.svFlags & SVF_NOCLIENT ) {
-			continue;
+			// never send entities that aren't linked in
+			if ( !ent->r.linked ) {
+				continue;
+			}
+			// entities can be flagged to explicitly not be sent to the client
+			if ( ent->r.svFlags & SVF_NOCLIENT ) {
+				continue;
+			}
 		}
 		// entities can be flagged to be sent to only one client
 		if ( ent->r.svFlags & SVF_SINGLECLIENT ) {
@@ -1105,8 +1342,7 @@ static void SV_BuildClientSnapshot( client_t *client ) {
 	// in the list which will need to be resorted for the delta compression
 	// to work correctly.  This also catches the error condition
 	// of an entity being included twice.
-	qsort( entityNumbers.snapshotEntities, entityNumbers.numSnapshotEntities, 
-		sizeof( entityNumbers.snapshotEntities[0] ), SV_QsortEntityNumbers );
+	SV_SortSnapshotEntities( &entityNumbers );
 
 	// now that all viewpoint's areabits have been OR'd together, invert
 	// all of them to make it a mask vector, which is what the renderer wants
@@ -1285,6 +1521,10 @@ void SV_SendClientMessages(void)
 	int				rate;
 	client_t		*c;
 
+	SV_DeltaCacheNewFrame();
+	snapshotListActive = qtrue;
+	snapshotListBuilt = qfalse;
+
 	// send a message to each connected client
 	for(i=0; i < sv_maxclients->integer; i++)
 	{
@@ -1330,6 +1570,8 @@ void SV_SendClientMessages(void)
 		c->lastSnapshotTime = svs.time;
 		c->rateDelayed = qfalse;
     }
+
+	snapshotListActive = qfalse;
 }
 
 qboolean SV_IsValidSnapshotClient(client_t* client) {

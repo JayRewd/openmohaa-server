@@ -100,7 +100,6 @@ void G_TouchTriggers(Entity *ent)
     int        num;
     int        touch[MAX_GENTITIES];
     gentity_t *hit;
-    Event     *ev;
 
     // dead things don't activate triggers!
     if ((ent->client || (ent->edict->r.svFlags & SVF_MONSTER)) && (ent->IsDead())) {
@@ -125,8 +124,8 @@ void G_TouchTriggers(Entity *ent)
 
         assert(hit->entity);
 
-        ev = new Event(EV_Touch);
-        ev->AddEntity(ent);
+        Event ev(EV_Touch);
+        ev.AddEntity(ent);
         hit->entity->ProcessEvent(ev);
     }
 }
@@ -1793,6 +1792,10 @@ void G_BroadcastAIEvent(Entity *originator, Vector origin, int iType, float radi
     int       i;
     int       iNumSentients;
     int       iAreaNum;
+
+    if (!G_AnyActorExists()) {
+        return;
+    }
 
     if (iType == AI_EVENT_MISC || iType == AI_EVENT_MISC_LOUD) {
         ent = static_cast<Sentient *>(G_GetEntity(0));

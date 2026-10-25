@@ -38,6 +38,8 @@ struct PathSearchParameter {
     int     fallHeight;
     Entity *entity;
     bool    allowLadders = true;
+    // Reject destinations closer than this (XY) before running findPath.
+    float   minTravelDistance = 0.0f;
 };
 
 class IPather : public LightClass

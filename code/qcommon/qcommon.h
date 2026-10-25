@@ -1175,6 +1175,7 @@ const char* Z_NumberStringPointer(int iNum);
 // commandLine should not include the executable name (argv[0])
 void Com_Init( char *commandLine );
 void Com_Frame( void );
+void Com_ResetFrameTime( void );
 void Com_Shutdown( void );
 
 qboolean Com_SanitizeName( const char *pszOldName, char *pszNewName, size_t bufferSize );
@@ -1535,7 +1536,20 @@ int		Huff_Receive (node_t *node, int *ch, byte *fin);
 void	Huff_transmit (huff_t *huff, int ch, byte *fout, int maxoffset);
 void	Huff_offsetReceive (node_t *node, int *ch, byte *fin, int *offset, int maxoffset);
 void	Huff_offsetTransmit (huff_t *huff, int ch, byte *fout, int *offset, int maxoffset);
+
+// Precomputed prefix codes of a tree that no longer changes (the message
+// compressor after MSG_initHuffman). Emits exactly what Huff_offsetTransmit
+// would, without walking the tree.
+typedef struct {
+	qboolean		built;
+	int				length[HMAX];	// -1: not tabled, use Huff_offsetTransmit
+	unsigned int	bits[HMAX];		// bit i is the i-th bit sent (root first)
+} huffCodeTable_t;
+
+void	Huff_BuildCodeTable (const huff_t *huff, huffCodeTable_t *table);
+void	Huff_offsetTransmitCode (const huffCodeTable_t *table, huff_t *huff, int ch, byte *fout, int *offset, int maxoffset);
 void	Huff_putBit( int bit, byte *fout, int *offset);
+void	Huff_putBits( unsigned int value, int n, byte *fout, int *offset);
 int		Huff_getBit( byte *fout, int *offset);
 
 extern huffman_t clientHuffTables;

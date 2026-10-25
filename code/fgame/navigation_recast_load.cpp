@@ -33,6 +33,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #include "navigation_recast_obstacle.h"
 #include "navigation_recast_path.h"
 #include "navigation_recast_config.h"
+#include "navigation_recast_cache.h"
 #include "navigation_recast_helpers.h"
 #include "navigation_recast_debug.h"
 #include "../script/scriptexception.h"
@@ -251,7 +252,18 @@ void NavigationMap::BuildDetourData(
         dtParams.offMeshConUserID = offMeshConUserID;
     }
 
-    dtCreateNavMeshData(&dtParams, &navData, &navDataSize);
+    if (!dtCreateNavMeshData(&dtParams, &navData, &navDataSize) || !navData) {
+        if (points.NumObjects()) {
+            delete[] offMeshConVerts;
+            delete[] offMeshConRad;
+            delete[] offMeshConFlags;
+            delete[] offMeshConAreas;
+            delete[] offMeshConDir;
+            delete[] offMeshConUserID;
+        }
+        buildContext.log(RC_LOG_ERROR, "dtCreateNavMeshData failed");
+        return;
+    }
 
     if (points.NumObjects()) {
         delete[] offMeshConVerts;
@@ -262,9 +274,32 @@ void NavigationMap::BuildDetourData(
         delete[] offMeshConUserID;
     }
 
+    // Keep a pristine copy for the world tile so we can persist before Detour
+    // mutates links in-place under DT_TILE_FREE_DATA ownership.
+    unsigned char *pristine     = NULL;
+    int            pristineSize = 0;
+
+    if (index == 0 && navDataSize > 0) {
+        pristine = (unsigned char *)gi.Malloc(navDataSize);
+        if (pristine) {
+            memcpy(pristine, navData, navDataSize);
+            pristineSize = navDataSize;
+        }
+    }
+
     status = navMeshDt->addTile(navData, navDataSize, DT_TILE_FREE_DATA, 0, NULL);
     if (!dtStatusSucceed(status)) {
+        dtFree(navData);
+        if (pristine) {
+            gi.Free(pristine);
+        }
         buildContext.log(RC_LOG_ERROR, "Failed to create tile for navigation mesh");
+        return;
+    }
+
+    if (pristine) {
+        SaveNavMeshCache(currentMap.c_str(), pristine, pristineSize);
+        gi.Free(pristine);
     }
 }
 
@@ -539,6 +574,9 @@ NavigationMap::NavigationMap()
     : navMeshDt(NULL)
     , navMeshQuery(NULL)
     , queryFilter(NULL)
+    , polyRegions(NULL)
+    , polyRegionCounts(NULL)
+    , polyRegionMaxTiles(0)
 {
     validNavigation = false;
 }
@@ -605,14 +643,168 @@ void NavigationMap::Update() {}
 NavigationMap::ClearNavigation
 ============
 */
+void NavigationMap::ClearPolyRegions()
+{
+    if (polyRegions) {
+        for (int i = 0; i < polyRegionMaxTiles; i++) {
+            if (polyRegions[i]) {
+                delete[] polyRegions[i];
+                polyRegions[i] = NULL;
+            }
+        }
+        delete[] polyRegions;
+        polyRegions = NULL;
+    }
+    if (polyRegionCounts) {
+        delete[] polyRegionCounts;
+        polyRegionCounts = NULL;
+    }
+    polyRegionMaxTiles = 0;
+}
+
+void NavigationMap::LabelConnectedRegions()
+{
+    ClearPolyRegions();
+
+    if (!navMeshDt) {
+        return;
+    }
+
+    const dtNavMesh *navMesh = navMeshDt;
+
+    polyRegionMaxTiles = navMesh->getMaxTiles();
+    if (polyRegionMaxTiles <= 0) {
+        return;
+    }
+
+    polyRegions      = new unsigned short *[polyRegionMaxTiles];
+    polyRegionCounts = new int[polyRegionMaxTiles];
+    memset(polyRegions, 0, sizeof(unsigned short *) * polyRegionMaxTiles);
+    memset(polyRegionCounts, 0, sizeof(int) * polyRegionMaxTiles);
+
+    for (int i = 0; i < polyRegionMaxTiles; i++) {
+        const dtMeshTile *tile = navMesh->getTile(i);
+        if (!tile || !tile->header || tile->header->polyCount <= 0) {
+            continue;
+        }
+        polyRegionCounts[i] = tile->header->polyCount;
+        polyRegions[i]      = new unsigned short[tile->header->polyCount];
+        memset(polyRegions[i], 0, sizeof(unsigned short) * tile->header->polyCount);
+    }
+
+    // Union-find over every link, taken as undirected. Fall and high-ledge
+    // off-mesh links are one-way, so a forward flood would split an area
+    // from what it can drop into depending on flood order; joining both ends
+    // makes "different region" mean no path in either direction.
+    int *firstIndex = new int[polyRegionMaxTiles];
+    int  total      = 0;
+
+    for (int i = 0; i < polyRegionMaxTiles; i++) {
+        firstIndex[i] = total;
+        total += polyRegionCounts[i];
+    }
+
+    if (!total) {
+        delete[] firstIndex;
+        return;
+    }
+
+    int *parent = new int[total];
+    for (int k = 0; k < total; k++) {
+        parent[k] = k;
+    }
+
+    auto findRoot = [parent](int k) {
+        while (parent[k] != k) {
+            parent[k] = parent[parent[k]]; // path halving
+            k         = parent[k];
+        }
+        return k;
+    };
+
+    for (int i = 0; i < polyRegionMaxTiles; i++) {
+        const dtMeshTile *tile = navMesh->getTile(i);
+        if (!tile || !tile->header || !polyRegions[i]) {
+            continue;
+        }
+
+        for (int j = 0; j < tile->header->polyCount; j++) {
+            const dtPoly *poly = &tile->polys[j];
+
+            for (unsigned int link = poly->firstLink; link != DT_NULL_LINK; link = tile->links[link].next) {
+                const dtPolyRef neiRef = tile->links[link].ref;
+                if (!neiRef) {
+                    continue;
+                }
+
+                unsigned int salt, it, ip;
+                navMeshDt->decodePolyId(neiRef, salt, it, ip);
+                if (it >= (unsigned int)polyRegionMaxTiles || !polyRegions[it]
+                    || ip >= (unsigned int)polyRegionCounts[it]) {
+                    continue;
+                }
+
+                const int a = findRoot(firstIndex[i] + j);
+                const int b = findRoot(firstIndex[it] + (int)ip);
+                if (a != b) {
+                    parent[a] = b;
+                }
+            }
+        }
+    }
+
+    // Number the components 1..N; give up (no labels) past the uint16 range
+    // rather than merge islands.
+    int *rootRegion = new int[total];
+    int  nextRegion = 1;
+    bool overflow   = false;
+
+    memset(rootRegion, 0, sizeof(int) * total);
+    for (int i = 0; i < polyRegionMaxTiles && !overflow; i++) {
+        for (int j = 0; j < polyRegionCounts[i]; j++) {
+            const int root = findRoot(firstIndex[i] + j);
+
+            if (!rootRegion[root]) {
+                if (nextRegion > 0xFFFF) {
+                    overflow = true;
+                    break;
+                }
+                rootRegion[root] = nextRegion++;
+            }
+            polyRegions[i][j] = (unsigned short)rootRegion[root];
+        }
+    }
+
+    delete[] rootRegion;
+    delete[] parent;
+    delete[] firstIndex;
+
+    if (overflow) {
+        ClearPolyRegions();
+    }
+}
+
+unsigned short NavigationMap::GetPolyRegion(dtPolyRef ref) const
+{
+    if (!navMeshDt || !polyRegions || !ref) {
+        return 0;
+    }
+
+    unsigned int salt, it, ip;
+    navMeshDt->decodePolyId(ref, salt, it, ip);
+    if (it >= (unsigned int)polyRegionMaxTiles || !polyRegions[it] || ip >= (unsigned int)polyRegionCounts[it]) {
+        return 0;
+    }
+    return polyRegions[it][ip];
+}
+
 void NavigationMap::ClearNavigation()
 {
-    size_t i;
-
     validNavigation = false;
 
     pathMaster.ClearNavigation();
     navigationObstacleMap.Clear();
+    ClearPolyRegions();
 
     if (navMeshQuery) {
         dtFreeNavMeshQuery(navMeshQuery);
@@ -707,6 +899,126 @@ void NavigationMap::BuildMeshesForEntities(RecastBuildContext& buildContext, con
 
 /*
 ============
+NavigationMap::TryLoadNavMeshCache
+============
+*/
+bool NavigationMap::TryLoadNavMeshCache(const char *mapname)
+{
+    NavmeshCacheKey     key;
+    char                path[MAX_QPATH];
+    void               *fileBuf = NULL;
+    long                fileLen;
+    const unsigned char *tileSrc;
+    int                 tileSize;
+    unsigned char      *tile;
+    RecastBuildContext  buildContext;
+    int                 start, end;
+
+    if (developer && developer->integer) {
+        gi.Printf("Navmesh cache skip (developer)\n");
+        return false;
+    }
+
+    start = gi.Milliseconds();
+
+    if (!NavmeshCache_BuildKey(mapname, &key)) {
+        gi.Printf("Navmesh cache MISS (no BSP for key)\n");
+        return false;
+    }
+    if (!NavmeshCache_PathForMap(mapname, path, sizeof(path))) {
+        return false;
+    }
+
+    fileLen = gi.FS_ReadFile(path, &fileBuf, qtrue);
+    if (fileLen < 0 || !fileBuf) {
+        gi.Printf("Navmesh cache MISS %s\n", path);
+        return false;
+    }
+
+    if (!NavmeshCache_Validate(fileBuf, fileLen, &key, &tileSrc, &tileSize)) {
+        gi.Printf("Navmesh cache REJECT %s\n", path);
+        gi.FS_FreeFile(fileBuf);
+        return false;
+    }
+
+    InitializeExtensions();
+    InitializeNavMesh(buildContext, navigationData.navMap);
+    InitializeFilter();
+
+    tile = (unsigned char *)dtAlloc(tileSize, DT_ALLOC_PERM);
+    if (!tile) {
+        gi.Printf("Navmesh cache REJECT (alloc)\n");
+        ClearNavigation();
+        gi.FS_FreeFile(fileBuf);
+        return false;
+    }
+    memcpy(tile, tileSrc, tileSize);
+    gi.FS_FreeFile(fileBuf);
+
+    if (!dtStatusSucceed(navMeshDt->addTile(tile, tileSize, DT_TILE_FREE_DATA, 0, NULL))) {
+        gi.Printf("Navmesh cache REJECT (addTile)\n");
+        dtFree(tile);
+        ClearNavigation();
+        return false;
+    }
+
+    pathMaster.PostLoadNavigation(*this);
+    navigationObstacleMap.Init();
+    ClearExtensions();
+    validNavigation = true;
+
+    end = gi.Milliseconds();
+    gi.Printf("Navmesh cache HIT %s in %.03f seconds\n", path, (float)((end - start) / 1000.0));
+    return true;
+}
+
+/*
+============
+NavigationMap::SaveNavMeshCache
+============
+*/
+void NavigationMap::SaveNavMeshCache(const char *mapPath, const unsigned char *navData, int navDataSize)
+{
+    NavmeshCacheKey    key;
+    NavmeshCacheHeader hdr;
+    char               path[MAX_QPATH];
+    unsigned char     *buf;
+    int                total, wrote;
+
+    if (!navData || navDataSize <= 0) {
+        return;
+    }
+    if (!NavmeshCache_BuildKey(mapPath, &key)) {
+        return;
+    }
+    if (!NavmeshCache_PathForMap(mapPath, path, sizeof(path))) {
+        return;
+    }
+    NavmeshCache_FillHeader(&hdr, &key);
+
+    total = (int)sizeof(hdr) + (int)sizeof(int32_t) + navDataSize;
+    buf   = (unsigned char *)gi.Malloc(total);
+    if (!buf) {
+        gi.Printf("WARNING: navmesh cache alloc failed for %s\n", path);
+        return;
+    }
+    memcpy(buf, &hdr, sizeof(hdr));
+    {
+        int32_t dataSize = navDataSize;
+        memcpy(buf + sizeof(hdr), &dataSize, sizeof(dataSize));
+        memcpy(buf + sizeof(hdr) + sizeof(dataSize), navData, navDataSize);
+    }
+    wrote = gi.FS_WriteFile(path, buf, total);
+    gi.Free(buf);
+    if (wrote != total) {
+        gi.Printf("WARNING: failed to write navmesh cache %s\n", path);
+        return;
+    }
+    gi.Printf("Navmesh cache WRITE %s (%d bytes)\n", path, total);
+}
+
+/*
+============
 NavigationMap::LoadWorldMap
 ============
 */
@@ -732,6 +1044,10 @@ void NavigationMap::LoadWorldMap(const char *mapname)
     }
 
     if (validNavigation) {
+        return;
+    }
+
+    if (TryLoadNavMeshCache(mapname)) {
         return;
     }
 
@@ -792,6 +1108,13 @@ void NavigationMap::LoadWorldMap(const char *mapname)
     gi.Printf("Recast navigation mesh(es) generated in %.03f seconds\n", (float)((end - start) / 1000.0));
 
     validNavigation = true;
+
+    // The parsed BSP triangles are only read by the debug drawing (a cache
+    // hit never fills them either), so free them outside developer mode.
+    if (!developer || !developer->integer) {
+        navigationData.navMap.GetWorldMap().surfaces.FreeObjectList();
+        navigationData.navMap.subModels.FreeObjectList();
+    }
 }
 
 void NavigationMap::CleanUp(qboolean samemap)

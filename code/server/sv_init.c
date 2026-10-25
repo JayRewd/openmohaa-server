@@ -69,6 +69,89 @@ void SV_SendConfigstring( client_t *client, int index );
 
 /*
 ===============
+SV_FindIndex cache
+
+Remembers name -> index answers of SV_FindIndex. Each cached answer carries
+the generation of its configstring range; any write in that range bumps the
+generation, so a hit always equals what the linear scan would return.
+===============
+*/
+#define FINDINDEX_CACHE_SIZE	2048	// power of two
+#define FINDINDEX_NAME_LEN		128
+
+typedef struct {
+	int				start;
+	int				max;
+	unsigned int	generation;
+} findIndexRange_t;
+
+typedef struct {
+	unsigned int	generation;	// 0 = empty
+	int				range;
+	int				index;
+	char			name[FINDINDEX_NAME_LEN];
+} findIndexEntry_t;
+
+static findIndexRange_t findIndexRanges[] = {
+	{ CS_MODELS,	MAX_MODELS,		1 },
+	{ CS_SOUNDS,	MAX_SOUNDS,		1 },
+	{ CS_IMAGES,	MAX_IMAGES,		1 },
+	{ CS_WEAPONS,	MAX_WEAPONS,	1 },
+};
+static findIndexEntry_t findIndexCache[FINDINDEX_CACHE_SIZE];
+
+static void SV_FindIndexBumpRange( findIndexRange_t *range ) {
+	range->generation++;
+	if ( !range->generation ) {
+		// wrapped: start over so no stale entry can match
+		Com_Memset( findIndexCache, 0, sizeof( findIndexCache ) );
+		range->generation = 1;
+	}
+}
+
+// index < 0 means every configstring changed
+void SV_FindIndexCacheChanged( int index ) {
+	int i;
+
+	for ( i = 0; i < ARRAY_LEN( findIndexRanges ); i++ ) {
+		findIndexRange_t *range = &findIndexRanges[i];
+
+		if ( index < 0 || ( index >= range->start && index < range->start + range->max ) ) {
+			SV_FindIndexBumpRange( range );
+		}
+	}
+}
+
+static int SV_FindIndexRange( int start, int max ) {
+	int i;
+
+	for ( i = 0; i < ARRAY_LEN( findIndexRanges ); i++ ) {
+		if ( findIndexRanges[i].start == start && findIndexRanges[i].max == max ) {
+			return i;
+		}
+	}
+	return -1;
+}
+
+// Case-folds like Q_stricmp so equal names share a slot.
+static unsigned int SV_FindIndexHash( const char *name, int range, size_t *len ) {
+	unsigned int	hash = 2166136261u ^ (unsigned int)range;
+	size_t			i;
+
+	for ( i = 0; name[i]; i++ ) {
+		int c = (unsigned char)name[i];
+
+		if ( c >= 'a' && c <= 'z' ) {
+			c -= ( 'a' - 'A' );
+		}
+		hash = ( hash ^ (unsigned int)c ) * 16777619u;
+	}
+	*len = i;
+	return hash & ( FINDINDEX_CACHE_SIZE - 1 );
+}
+
+/*
+===============
 SV_SetConfigstring
 
 ===============
@@ -93,6 +176,7 @@ void SV_SetConfigstring (int index, const char *val) {
 	// change the string in sv
 	Z_Free( sv.configstrings[index] );
 	sv.configstrings[index] = CopyString( val );
+	SV_FindIndexCacheChanged( index );
 
 	// send it to all the clients if we aren't
 	// spawning a new server
@@ -145,10 +229,22 @@ char *SV_GetConfigstring( int index )
 SV_FindIndex
 ================
 */
+static void SV_FindIndexRemember( findIndexEntry_t *entry, int range, int index, const char *name ) {
+	if ( !entry ) {
+		return;
+	}
+	entry->generation = findIndexRanges[range].generation;
+	entry->range = range;
+	entry->index = index;
+	Q_strncpyz( entry->name, name, sizeof( entry->name ) );
+}
+
 int SV_FindIndex( const char *name, int start, int max, qboolean create ) {
 	int		i;
 	int		result;
 	char	*s;
+	int		range;
+	findIndexEntry_t *entry;
 
 	if( !name || !name[ 0 ] ) {
 		return 0;
@@ -162,6 +258,20 @@ int SV_FindIndex( const char *name, int start, int max, qboolean create ) {
 		Com_Error( 1, "SV_FindIndex: bad max index %i\n", max );
 	}
 
+	range = SV_FindIndexRange( start, max );
+	entry = NULL;
+	if ( range >= 0 ) {
+		size_t len;
+
+		entry = &findIndexCache[ SV_FindIndexHash( name, range, &len ) ];
+		if ( len >= FINDINDEX_NAME_LEN ) {
+			entry = NULL;	// too long to remember; always scan
+		} else if ( entry->generation == findIndexRanges[range].generation && entry->range == range
+			&& !Q_stricmp( entry->name, name ) && !Q_stricmp( sv.configstrings[ start + entry->index ], name ) ) {
+			return entry->index;
+		}
+	}
+
 	for( i = 1; i<max; i++ ) {
 		s = sv.configstrings[ start + i ];
 
@@ -170,6 +280,7 @@ int SV_FindIndex( const char *name, int start, int max, qboolean create ) {
 		}
 
 		if( !Q_stricmp( s, name ) ) {
+			SV_FindIndexRemember( entry, range, i, name );
 			return i;
 		}
 	}
@@ -180,6 +291,7 @@ int SV_FindIndex( const char *name, int start, int max, qboolean create ) {
 		s = sv.configstrings[ start + i ];
 
 		if( !Q_stricmp( s, name ) ) {
+			SV_FindIndexRemember( entry, range, i, name );
 			return i;
 		}
 	}
@@ -193,6 +305,8 @@ int SV_FindIndex( const char *name, int start, int max, qboolean create ) {
 	}
 
 	SV_SetConfigstring( start + result, name );
+	// SV_SetConfigstring bumped the generation; remember the new slot under it
+	SV_FindIndexRemember( entry, range, result, name );
 	return result;
 }
 
@@ -226,7 +340,13 @@ int SV_SoundIndex( const char *name, qboolean streamed )
 	char buf[ 1024 ];
 
 	Q_strncpyz( buf, name, sizeof(buf) );
-	Q_strcat( buf, sizeof(buf), va( "%d", streamed ) );
+	if ( streamed == qfalse || streamed == qtrue ) {
+		// same text as va( "%d", streamed ), without the printf machinery
+		const char digit[2] = { (char)( '0' + streamed ), 0 };
+		Q_strcat( buf, sizeof(buf), digit );
+	} else {
+		Q_strcat( buf, sizeof(buf), va( "%d", streamed ) );
+	}
 
 	return SV_FindIndex( buf, CS_SOUNDS, MAX_SOUNDS, qtrue );
 }
@@ -549,6 +669,7 @@ void SV_ClearServer(void) {
 		}
 	}
 	Com_Memset (&sv, 0, sizeof(sv));
+	SV_FindIndexCacheChanged( -1 );
 	sv.frameTime = 1.0 / sv_fps->value;
 }
 
@@ -586,6 +707,8 @@ void SV_SpawnServer( const char *server, qboolean loadgame, qboolean restart, qb
 	qboolean	differentmap;
 	qboolean	keep_scripts;
 	const char	*p;
+
+	SV_SnapshotListReset();
 
 	keep_scripts = restart;
 
@@ -871,6 +994,7 @@ void SV_SpawnServer( const char *server, qboolean loadgame, qboolean restart, qb
 						// when we get the next packet from a connected client,
 						// the new gamestate will be sent
 						svs.clients[ i ].state = CS_CONNECTED;
+						svs.clients[ i ].lastGamestateResendTime = 0;
 					}
 				}
 				else
@@ -977,6 +1101,11 @@ void SV_SpawnServer( const char *server, qboolean loadgame, qboolean restart, qb
 	if( g_gametype->integer != GT_SINGLE_PLAYER ) {
 		SV_ServerLoaded();
 	}
+
+	// sv.serverId already took com_frameTime; drop load/restart wall time
+	// so the next frame is not a multi-second catch-up burst.
+	Com_ResetFrameTime();
+	sv.spawnFrameTime = com_frameTime;
 }
 
 /*
@@ -1205,6 +1334,8 @@ before Sys_Quit or SyScriptError
 ================
 */
 void SV_Shutdown( const char *finalmsg ) {
+	SV_SnapshotListReset();
+
 	if ( !com_sv_running || !com_sv_running->integer ) {
 		return;
 	}
@@ -1365,6 +1496,23 @@ void SV_HandleNonPVSSound()
 {
 	gentity_t *ent;
 	int i;
+
+	// Emission is gated by sv_netoptimize; with it off and an empty cache,
+	// skip the entity scan and cleanup walk.
+	if (!sv_netoptimize->integer) {
+		qboolean any = qfalse;
+
+		for (i = 1; i < MAX_SOUNDS; i++) {
+			if (svs.nonpvs_sound_cache[i].inUse) {
+				any = qtrue;
+				break;
+			}
+		}
+
+		if (!any) {
+			return;
+		}
+	}
 
 	SV_CacheNonPVSSound();
 

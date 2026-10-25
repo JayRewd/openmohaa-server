@@ -522,10 +522,11 @@ bool RegularBotMovement::AvoidPath(
     }
 
     PathSearchParameter parameters;
-    parameters.entity       = controlledEntity;
-    parameters.fallHeight   = maxFallHeight;
-    parameters.leashDist    = fLeashRadius;
-    parameters.allowLadders = false;
+    parameters.entity             = controlledEntity;
+    parameters.fallHeight         = maxFallHeight;
+    parameters.leashDist          = fLeashRadius;
+    parameters.allowLadders       = false;
+    parameters.minTravelDistance  = fMinTravelDistance;
     if (vLeashHome) {
         parameters.leashHome = vLeashHome;
     }
@@ -541,16 +542,57 @@ bool RegularBotMovement::AvoidPath(
         return false;
     }
 
-    const Vector destination = m_pPath->GetDestination();
+    // Enforced here for every pather (the legacy one ignores
+    // minTravelDistance); checks where the path really ends.
     if (fMinTravelDistance > 0.0f
-        && (destination - controlledEntity->origin).lengthXYSquared() < Square(fMinTravelDistance)) {
+        && (m_pPath->GetDestination() - controlledEntity->origin).lengthXYSquared() < Square(fMinTravelDistance)) {
         ClearMove();
         return false;
     }
 
     NewMove();
     m_iLastMoveTime = level.inttime;
-    m_vTargetPos    = destination;
+    m_vTargetPos    = m_pPath->GetDestination();
+    return true;
+}
+
+/*
+====================
+Wander
+
+Pick a random reachable point around the bot and path to it.
+====================
+*/
+bool RegularBotMovement::Wander(float fRadius, float fMinTravelDistance)
+{
+    PathSearchParameter parameters;
+    parameters.entity            = controlledEntity;
+    parameters.fallHeight        = maxFallHeight;
+    parameters.allowLadders      = false;
+    parameters.minTravelDistance = fMinTravelDistance;
+
+    if (!m_pPath) {
+        m_pPath = IPather::CreatePather();
+    }
+
+    m_pPath->FindPathNear(controlledEntity->origin, controlledEntity->origin, fRadius, parameters);
+
+    if (!m_pPath->GetNodeCount()) {
+        ClearMove();
+        return false;
+    }
+
+    // Enforced here for every pather (the legacy one ignores
+    // minTravelDistance); checks where the path really ends.
+    if (fMinTravelDistance > 0.0f
+        && (m_pPath->GetDestination() - controlledEntity->origin).lengthXYSquared() < Square(fMinTravelDistance)) {
+        ClearMove();
+        return false;
+    }
+
+    NewMove();
+    m_iLastMoveTime = level.inttime;
+    m_vTargetPos    = m_pPath->GetDestination();
     return true;
 }
 

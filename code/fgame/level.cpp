@@ -758,9 +758,10 @@ void Level::Init(void)
 
     current_map = NULL;
 
-    framenum  = 0;
-    time      = 0;
-    frametime = 0;
+    framenum     = 0;
+    time         = 0;
+    frametime    = 0;
+    highestScore = 0;
 
     level_name = "";
     mapname    = "";

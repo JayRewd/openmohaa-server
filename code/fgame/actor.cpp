@@ -2744,6 +2744,7 @@ const_str Actor::m_csThinkStateNames[NUM_THINKSTATES] = {
 
 SafePtr<Actor> Actor::mBodyQueue[MAX_BODYQUEUE];
 int            Actor::mCurBody;
+int            Actor::s_iNumActors;
 
 /*
 ===============
@@ -2756,6 +2757,7 @@ Actor::Actor()
     : mVoiceType(-1)
 {
     entflags |= ECF_ACTOR;
+    s_iNumActors++;
 
     m_pszDebugState = "";
     m_pFallPath     = NULL;
@@ -3016,6 +3018,12 @@ Actor::~Actor()
     ClearTurnEntity();
 
     entflags &= ~ECF_ACTOR;
+    s_iNumActors--;
+}
+
+qboolean G_AnyActorExists(void)
+{
+    return Actor::AnyExists() ? qtrue : qfalse;
 }
 
 /*

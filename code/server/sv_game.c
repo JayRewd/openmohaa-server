@@ -145,7 +145,7 @@ void SV_InitCGMessage (int iClient)
 		pCGM->data = Z_Malloc(CGM_DATA_SIZE);
 
 	if ( pCGM->datatypes == 0 )
-		pCGM->datatypes = Z_Malloc(CGM_DATA_SIZE);
+		pCGM->datatypes = Z_Malloc(CGM_DATATYPES_SIZE);
 
 	pCGM->cursize = 0;
 	pCGM->dtindex = 0;
@@ -454,6 +454,18 @@ void MSG_SetBroadcastAll()
 	}
 }
 
+// Leaf data of each client's last origin. The lookup only depends on the
+// origin and the loaded map, so reusing it gives the same answer.
+typedef struct {
+	qboolean	valid;
+	int		serverId;
+	vec3_t	origin;
+	int		area;
+	int		cluster;
+} broadcastLeafCache_t;
+
+static broadcastLeafCache_t broadcastLeafCache[MAX_CLIENTS];
+
 void MSG_SetBroadcastVisible(const vec_t* vPos, const vec_t* vPosB)
 {
     byte *clientpvs;
@@ -501,9 +513,21 @@ void MSG_SetBroadcastVisible(const vec_t* vPos, const vec_t* vPosB)
 			continue;
 		}
 
-		leafnum = CM_PointLeafnum(pClient->gentity->s.origin);
-		clientarea = CM_LeafArea(leafnum);
-		clientcluster = CM_LeafCluster(leafnum);
+		{
+			broadcastLeafCache_t *cache = &broadcastLeafCache[i];
+
+			if (!cache->valid || cache->serverId != sv.serverId
+				|| !VectorCompare(cache->origin, pClient->gentity->s.origin)) {
+				leafnum = CM_PointLeafnum(pClient->gentity->s.origin);
+				cache->valid = qtrue;
+				cache->serverId = sv.serverId;
+				VectorCopy(pClient->gentity->s.origin, cache->origin);
+				cache->area = CM_LeafArea(leafnum);
+				cache->cluster = CM_LeafCluster(leafnum);
+			}
+			clientarea = cache->area;
+			clientcluster = cache->cluster;
+		}
 		clientpvs = CM_ClusterPVS(clientcluster);
 
 		if (!CM_AreasConnected(clientarea, posarea) && (!vPosB || !CM_AreasConnected(clientarea, posBarea))) {

@@ -537,7 +537,10 @@ void G_RunFrame(int levelTime, int frameTime)
         //
         // treat each object in turn
         //
-        for (edict = active_edicts.next; edict != &active_edicts; edict = edict->next) {
+        // Only Actors do anything here; skip the walk when none exist
+        // (ECF_ACTOR and the live count change together in Actor's ctor/dtor).
+        for (edict = G_AnyActorExists() ? active_edicts.next : &active_edicts; edict != &active_edicts;
+             edict = edict->next) {
             assert(edict);
             assert(edict->inuse);
             assert(edict->entity);
@@ -1576,6 +1579,8 @@ qboolean G_ArchiveLevel(
 
         if (arc.Loading()) {
             arc.Close();
+            // SafePtrs are fixed in Close — restore per-Listener pending counts
+            L_RecountPendingEvents();
             LoadingSavegame = false;
             gi.Printf(HUD_MESSAGE_YELLOW "%s\n", gi.LV_ConvertString("Game Loaded"));
         } else {
@@ -1726,6 +1731,25 @@ void G_ClientEndServerFrames(void)
     // CalcBlend (called from EndFrame) used to decrement this,
     // causing fades to run N times faster with N clients.
     level.m_fade_time -= level.frametime;
+
+    // FFA top score once per frame — UpdateStats reads level.highestScore
+    if (g_gametype->integer < GT_TEAM) {
+        int bestKills = -9999;
+
+        for (i = 0; i < game.maxclients; i++) {
+            ent = g_entities + i;
+            if (!ent->inuse || !ent->client || !ent->entity) {
+                continue;
+            }
+
+            Player *p = static_cast<Player *>(ent->entity);
+            if (p->GetNumKills() > bestKills) {
+                bestKills = p->GetNumKills();
+            }
+        }
+
+        level.highestScore = bestKills;
+    }
 
     // calc the player views now that all pushing
     // and damage has been added

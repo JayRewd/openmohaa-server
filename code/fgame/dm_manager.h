@@ -188,6 +188,11 @@ private:
     size_t scoreLength;
     int    scoreEntries;
 
+    // FFA scoreboard is identical for every requester; reused within a frame
+    int    m_iFFAScoreCacheFrame;
+    char   m_FFAScoreCacheString[MAX_STRING_CHARS];
+    int    m_iFFAScoreCacheEntries;
+
 private:
     void BuildTeamInfo(DM_Team *dmTeam);
     void BuildTeamInfo_ver6(DM_Team *dmTeam);

@@ -25,6 +25,9 @@ file(GLOB_RECURSE GAME_SOURCES
 	${SOURCE_DIR}/parser/parsetree.cpp
 )
 
+# Unit tests under fgame/tests must not ship in the game module.
+list(FILTER GAME_SOURCES EXCLUDE REGEX "/fgame/tests/")
+
 # Compile lexer and grammar files
 
 if (FLEX_FOUND)
@@ -53,6 +56,7 @@ set(UI_QVM_SOURCES)
 set(GAME_MODULE_SHARED_SOURCES
     ${SOURCE_DIR}/qcommon/q_math.c
     ${SOURCE_DIR}/qcommon/q_shared.c
+    ${SOURCE_DIR}/qcommon/md4.c
     ${SCRIPT_SYSTEM_SOURCES}
 )
 
@@ -95,6 +99,12 @@ if(BUILD_GAME_LIBRARIES)
     target_link_libraries(      ${GAME_MODULE_BINARY_BASEGAME} PRIVATE ${COMMON_LIBRARIES})
     set_target_properties(      ${GAME_MODULE_BINARY_BASEGAME} PROPERTIES OUTPUT_NAME ${GAME_MODULE_BINARY})
     set_output_dirs(            ${GAME_MODULE_BINARY_BASEGAME} SUBDIRECTORY ${BASEGAME})
+
+    # Nothing interposes the module's own functions, so let GCC inline and
+    # devirtualise across them (Clang already assumes this). Exports stay.
+    if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+        target_compile_options( ${GAME_MODULE_BINARY_BASEGAME} PRIVATE -fno-semantic-interposition)
+    endif()
 
     INSTALL(TARGETS ${GAME_MODULE_BINARY_BASEGAME} DESTINATION ${INSTALL_LIBDIR_FULL})
 

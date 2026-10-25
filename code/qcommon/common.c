@@ -228,6 +228,9 @@ console. The logfile must already be open.
 static void Com_WriteLogMessage( const char *msg ) {
 	static qboolean no_newline = qfalse;
 	size_t msgLen;
+	char line[MAXPRINTMSG + 64];
+	const char *out;
+	size_t outLen;
 
 	if ( !logfile || !FS_Initialized() ) {
 		return;
@@ -238,46 +241,52 @@ static void Com_WriteLogMessage( const char *msg ) {
 		return;
 	}
 
+	out = msg;
+	outLen = msgLen;
+
 	if ( com_logfile_timestamps->integer ) {
 		if ( !no_newline ) {
 			time_t t;
-			time_t t_gmt;
 			struct tm tms_local;
-			struct tm tms_gm;
 			double tz;
-			const char *tzStr;
-			char buffer[26];
+			char stamp[26];
 
 			t = time( NULL );
 #ifdef WIN32
-			localtime_s( &tms_local, &t );
-			gmtime_s( &tms_gm, &t );
+			{
+				TIME_ZONE_INFORMATION tzi;
+				DWORD tzId;
+				LONG bias;
+
+				localtime_s( &tms_local, &t );
+				tzId = GetTimeZoneInformation( &tzi );
+				bias = tzi.Bias;
+				if ( tzId == TIME_ZONE_ID_DAYLIGHT ) {
+					bias += tzi.DaylightBias;
+				} else if ( tzId == TIME_ZONE_ID_STANDARD ) {
+					bias += tzi.StandardBias;
+				}
+				/* Bias is minutes west of UTC; display hours east of UTC. */
+				tz = -bias / 60.0;
+			}
 #else
 			localtime_r( &t, &tms_local );
-			gmtime_r( &t, &tms_gm );
+			tz = tms_local.tm_gmtoff / 3600.0;
 #endif
-			t_gmt = mktime( &tms_gm );
-			tz = difftime( t, t_gmt ) / 60.0 / 60.0;
-
-			strftime( buffer, sizeof(buffer), "%Y-%m-%d %H:%M:%S", &tms_local );
-			FS_Write( "[", 1, logfile );
-			FS_Write( buffer, strlen(buffer), logfile );
-			FS_Write( " ", 1, logfile );
-
+			strftime( stamp, sizeof(stamp), "%Y-%m-%d %H:%M:%S", &tms_local );
 			if ( tz >= 0 ) {
-				tzStr = va( "UTC+%.03f", tz );
+				Com_sprintf( line, sizeof(line), "[%s UTC+%.03f] %s", stamp, tz, msg );
 			} else {
-				tzStr = va( "UTC%.03f", tz );
+				Com_sprintf( line, sizeof(line), "[%s UTC%.03f] %s", stamp, tz, msg );
 			}
-
-			FS_Write( tzStr, strlen(tzStr), logfile );
-			FS_Write( "] ", 2, logfile );
+			out = line;
+			outLen = strlen( line );
 		}
 
 		no_newline = msg[msgLen - 1] != '\n';
 	}
 
-	FS_Write( msg, msgLen, logfile );
+	FS_Write( out, outLen, logfile );
 }
 
 /*
@@ -1388,6 +1397,18 @@ int Com_Milliseconds (void) {
 	} while ( ev.evType != SE_NONE );
 
 	return ev.evTime;
+}
+
+/*
+================
+Com_ResetFrameTime
+
+Discard wall-clock time spent in map load / restart so the next Com_Frame
+does not treat it as catch-up frames.
+================
+*/
+void Com_ResetFrameTime( void ) {
+	com_frameTime = Sys_Milliseconds();
 }
 
 //============================================================================

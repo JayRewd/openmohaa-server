@@ -679,6 +679,7 @@ gotnewcl:
 	// notice that it is from a different serverid and that the
 	// gamestate message was not just sent, forcing a retransmit
 	newcl->gamestateMessageNum = -1;
+	newcl->lastGamestateResendTime = 0;
 
 	// if this was the first client on the server, or the last client
 	// the server can hold, send a heartbeat to the master.
@@ -913,6 +914,7 @@ void SV_ClientEnterWorld( client_t *client, usercmd_t *cmd ) {
 
 	Com_DPrintf( "Going from CS_PRIMED to CS_ACTIVE for %s\n", client->name );
 	client->state = CS_ACTIVE;
+	client->lastGamestateResendTime = 0;
 
 	// resend all configstrings using the cs commands since these are
 	// no longer sent when the client is CS_PRIMED
@@ -1006,6 +1008,7 @@ static void SV_DoneDownload_f( client_t *cl ) {
 
 	Com_DPrintf( "clientDownload: %s Done\n", cl->name);
 	// resend the game state to update any clients that entered during the download
+	cl->lastGamestateResendTime = 0;
 	SV_SendClientGameState(cl);
 }
 
@@ -1282,6 +1285,10 @@ int SV_SendQueuedMessages(void)
 		
 		if(cl->state)
 		{
+			// Idle clients have nothing to drain — skip RateMsec wakeups
+			if(!(cl->netchan.unsentFragments || cl->netchan_start_queue))
+				continue;
+
 			nextFragT = SV_RateMsec(cl);
 
 			if(!nextFragT)
@@ -2175,10 +2182,15 @@ void SV_ExecuteClientMessage( client_t *cl, msg_t *msg ) {
 			return;
 		}
 		// if we can tell that the client has dropped the last
-		// gamestate we sent them, resend it
+		// gamestate we sent them, resend it (rate-limited)
 		if ( cl->state != CS_ACTIVE && cl->messageAcknowledge > cl->gamestateMessageNum ) {
-			Com_DPrintf( "%s : dropped gamestate, resending\n", cl->name );
-			SV_SendClientGameState( cl );
+			int sinceResend = svs.time - cl->lastGamestateResendTime;
+
+			if ( cl->lastGamestateResendTime == 0 || sinceResend >= 1000 || sinceResend < 0 ) {
+				cl->lastGamestateResendTime = svs.time;
+				Com_DPrintf( "%s : dropped gamestate, resending\n", cl->name );
+				SV_SendClientGameState( cl );
+			}
 		}
 		return;
 	}

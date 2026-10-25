@@ -907,6 +907,10 @@ public:
     static SafePtr<Actor> mBodyQueue[MAX_BODYQUEUE];
     /* current body queue index */
     static int mCurBody;
+    /* live Actor instance count (ctor/dtor) */
+    static int s_iNumActors;
+
+    static bool AnyExists(void) { return s_iNumActors > 0; }
     /* leash home */
     Vector m_vHome;
     /* tether entity */
