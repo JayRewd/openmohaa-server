@@ -1242,6 +1242,9 @@ void SV_Frame( int msec ) {
 	{
 		svs.serverLagTime = svs.time;
 		SV_SendServerCommand( NULL, "svlag" );
+		// Stock clients only show svlag in developer mode; log it here so
+		// micro-freezes can be matched to map changes, joins or VPS steal.
+		Com_Printf( "Server frame overran: %d ms\n", msec );
 	}
 
 	// update ping based on the all received frames
