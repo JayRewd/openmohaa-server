@@ -100,6 +100,12 @@ if(BUILD_GAME_LIBRARIES)
     set_target_properties(      ${GAME_MODULE_BINARY_BASEGAME} PROPERTIES OUTPUT_NAME ${GAME_MODULE_BINARY})
     set_output_dirs(            ${GAME_MODULE_BINARY_BASEGAME} SUBDIRECTORY ${BASEGAME})
 
+    # Nothing interposes the module's own functions, so let GCC inline and
+    # devirtualise across them (Clang already assumes this). Exports stay.
+    if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+        target_compile_options( ${GAME_MODULE_BINARY_BASEGAME} PRIVATE -fno-semantic-interposition)
+    endif()
+
     INSTALL(TARGETS ${GAME_MODULE_BINARY_BASEGAME} DESTINATION ${INSTALL_LIBDIR_FULL})
 
     if(MSVC)
