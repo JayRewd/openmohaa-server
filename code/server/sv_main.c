@@ -385,8 +385,25 @@ CONNECTIONLESS COMMANDS
 #define MAX_BUCKETS			16384
 #define MAX_HASHES			1024
 
+// GameSpy queries get their own pool so browser traffic or a spoofed
+// query flood can never use up the buckets that connects rely on.
+#define MAX_QUERY_BUCKETS	4096
+
+typedef struct {
+	leakyBucket_t	*buckets;
+	int				numBuckets;
+	leakyBucket_t	**hashes;	// MAX_HASHES chains
+	int				allocateCursor;
+} bucketPool_t;
+
 static leakyBucket_t buckets[ MAX_BUCKETS ];
 static leakyBucket_t *bucketHashes[ MAX_HASHES ];
+static bucketPool_t connectionlessPool = { buckets, MAX_BUCKETS, bucketHashes, 0 };
+
+static leakyBucket_t queryBuckets[ MAX_QUERY_BUCKETS ];
+static leakyBucket_t *queryBucketHashes[ MAX_HASHES ];
+static bucketPool_t queryPool = { queryBuckets, MAX_QUERY_BUCKETS, queryBucketHashes, 0 };
+
 leakyBucket_t outboundLeakyBucket;
 
 /*
@@ -423,13 +440,13 @@ SVC_BucketForAddress
 Find or allocate a bucket for an address
 ================
 */
-static leakyBucket_t *SVC_BucketForAddress( netadr_t address, int burst, int period ) {
+static leakyBucket_t *SVC_BucketForAddress( bucketPool_t *pool, netadr_t address, int burst, int period ) {
 	leakyBucket_t	*bucket = NULL;
 	int						i;
 	long					hash = SVC_HashForAddress( address );
 	int						now = Sys_Milliseconds();
 
-	for ( bucket = bucketHashes[ hash ]; bucket; bucket = bucket->next ) {
+	for ( bucket = pool->hashes[ hash ]; bucket; bucket = bucket->next ) {
 		switch ( bucket->type ) {
 			case NA_IP:
 				if ( memcmp( bucket->ipv._4, address.ip, 4 ) == 0 ) {
@@ -448,19 +465,22 @@ static leakyBucket_t *SVC_BucketForAddress( netadr_t address, int burst, int per
 		}
 	}
 
-	for ( i = 0; i < MAX_BUCKETS; i++ ) {
+	// Round-robin from cursor so unique-address floods do not always rescan
+	// from slot 0.
+	for ( i = 0; i < pool->numBuckets; i++ ) {
 		int interval;
+		int index = ( pool->allocateCursor + i ) % pool->numBuckets;
 
-		bucket = &buckets[ i ];
+		bucket = &pool->buckets[ index ];
 		interval = now - bucket->lastTime;
 
 		// Reclaim expired buckets
-		if ( bucket->lastTime > 0 && ( interval > ( burst * period ) ||
+		if ( bucket->type != NA_BAD && ( interval > ( burst * period ) ||
 					interval < 0 ) ) {
 			if ( bucket->prev != NULL ) {
 				bucket->prev->next = bucket->next;
 			} else {
-				bucketHashes[ bucket->hash ] = bucket->next;
+				pool->hashes[ bucket->hash ] = bucket->next;
 			}
 			
 			if ( bucket->next != NULL ) {
@@ -483,14 +503,15 @@ static leakyBucket_t *SVC_BucketForAddress( netadr_t address, int burst, int per
 			bucket->hash = hash;
 
 			// Add to the head of the relevant hash chain
-			bucket->next = bucketHashes[ hash ];
-			if ( bucketHashes[ hash ] != NULL ) {
-				bucketHashes[ hash ]->prev = bucket;
+			bucket->next = pool->hashes[ hash ];
+			if ( pool->hashes[ hash ] != NULL ) {
+				pool->hashes[ hash ]->prev = bucket;
 			}
 
 			bucket->prev = NULL;
-			bucketHashes[ hash ] = bucket;
+			pool->hashes[ hash ] = bucket;
 
+			pool->allocateCursor = ( index + 1 ) % pool->numBuckets;
 			return bucket;
 		}
 	}
@@ -537,7 +558,21 @@ Rate limit for a particular address
 ================
 */
 qboolean SVC_RateLimitAddress( netadr_t from, int burst, int period ) {
-	leakyBucket_t *bucket = SVC_BucketForAddress( from, burst, period );
+	leakyBucket_t *bucket = SVC_BucketForAddress( &connectionlessPool, from, burst, period );
+
+	return SVC_RateLimit( bucket, burst, period );
+}
+
+/*
+================
+SVC_RateLimitQueryAddress
+
+Rate limit for a GameSpy query source, kept apart from the buckets used by
+connectionless packets such as getchallenge
+================
+*/
+qboolean SVC_RateLimitQueryAddress( netadr_t from, int burst, int period ) {
+	leakyBucket_t *bucket = SVC_BucketForAddress( &queryPool, from, burst, period );
 
 	return SVC_RateLimit( bucket, burst, period );
 }

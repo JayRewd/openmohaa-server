@@ -69,6 +69,7 @@ SV_Sound
 void SV_Sound( vec3_t *org, int entnum, int channel, const char *sound_name, float volume, float mindist, float pitch, float maxdist, qboolean streamed )
 {
     int i;
+    int sound_index = -1;
 
     for (i = 0; i < svs.iNumClients; i++)
     {
@@ -81,7 +82,11 @@ void SV_Sound( vec3_t *org, int entnum, int channel, const char *sound_name, flo
 			continue;
 		}
 
-        SV_ClientSound(client, org, entnum, channel, SV_SoundIndex(sound_name, streamed), volume, mindist, pitch, maxdist, streamed);
+		if (sound_index < 0) {
+			sound_index = SV_SoundIndex(sound_name, streamed);
+		}
+
+        SV_ClientSound(client, org, entnum, channel, sound_index, volume, mindist, pitch, maxdist, streamed);
     }
 }
 

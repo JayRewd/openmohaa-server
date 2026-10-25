@@ -318,7 +318,7 @@ This allows fair starts with variable load times.
 ================
 */
 static void SV_MapRestart_f( void ) {
-	if( com_frameTime == sv.serverId ) {
+	if( com_frameTime == sv.serverId || com_frameTime == sv.spawnFrameTime ) {
 		return;
 	}
 

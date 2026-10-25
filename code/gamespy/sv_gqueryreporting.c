@@ -89,6 +89,7 @@ INCLUDES
 #include "nonport.h"
 #endif
 #include "sv_gqueryreporting.h"
+#include "../server/server.h"
 #include <stdlib.h>
 #include <stdio.h>
 
@@ -98,6 +99,15 @@ INCLUDES
 #else
 #define assert(a)
 #endif
+
+#define QR_MAX_QUERIES_PER_FRAME 32
+
+// All GameSpy answers together: bursts of up to 30 (many browsers refreshing
+// at once), then 20 per second. Separate from outboundLeakyBucket so query
+// floods do not block getchallenge/getstatus.
+#define QR_GLOBAL_BURST          30
+#define QR_GLOBAL_PERIOD_MS      50
+static leakyBucket_t qrOutboundBucket;
 
 #ifdef __cplusplus
 extern "C" {
@@ -391,6 +401,8 @@ void qr_check_queries(qr_t qrec)
     fd_set set;
     struct timeval timeout = {0, 0};
     int error;
+    int queries = 0;
+    netadr_t from;
 
     if (0 == qrec->qport)
         return;
@@ -398,14 +410,34 @@ void qr_check_queries(qr_t qrec)
     FD_ZERO(&set);
     FD_SET(qrec->querysock, &set);
 
-    while (1) {
+    while (queries < QR_MAX_QUERIES_PER_FRAME) {
         error = select(FD_SETSIZE, &set, NULL, NULL, &timeout);
         if (gsiSocketIsError(error) || error == 0)
             return;
         //else we have data
+        saddrlen = sizeof(struct sockaddr_in);
         error = recvfrom(qrec->querysock, indata, INBUF_LEN - 1, 0, (struct sockaddr*)&saddr, &saddrlen);
         if (gsiSocketIsNotError(error)) {
+            queries++;
             indata[error] = '\0';
+
+            Com_Memset(&from, 0, sizeof(from));
+            from.type = NA_IP;
+            *(int *)&from.ip = saddr.sin_addr.s_addr;
+            from.port = saddr.sin_port;
+
+            // per source address, in a bucket pool of its own (not the one
+            // getchallenge uses), so browsing never blocks a connect
+            if (SVC_RateLimitQueryAddress(from, 10, 1000)) {
+                Com_DPrintf("qr_check_queries: rate limit from %s exceeded, dropping request\n",
+                    NET_AdrToString(from));
+                continue;
+            }
+            if (SVC_RateLimit(&qrOutboundBucket, QR_GLOBAL_BURST, QR_GLOBAL_PERIOD_MS)) {
+                Com_DPrintf("qr_check_queries: rate limit exceeded, dropping request\n");
+                continue;
+            }
+
             qr_parse_query(qrec, indata, error, (struct sockaddr*)&saddr);
         }
     }

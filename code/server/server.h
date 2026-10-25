@@ -82,6 +82,7 @@ typedef struct {
 	qboolean		restarting;			// if true, send configstring changes during SS_LOADING
 	int				serverId;			// changes each server start
 	int				restartedServerId;	// serverId before a map_restart
+	int				spawnFrameTime;		// com_frameTime after the load-time reset in SV_SpawnServer
 	int				checksumFeed;		// the feed key that we use to compute the pure checksum strings
 	// https://zerowing.idsoftware.com/bugzilla/show_bug.cgi?id=475
 	// the serverId associated with the current checksumFeed (always <= serverId)
@@ -154,6 +155,7 @@ typedef struct client_s {
 	int				messageAcknowledge;
 
 	int				gamestateMessageNum;	// netchan->outgoingSequence of gamestate
+	int				lastGamestateResendTime;	// svs.time of last dropped-gamestate resend
 	int				challenge;
     int				serverIdAcknowledge;
 
@@ -443,6 +445,7 @@ extern leakyBucket_t outboundLeakyBucket;
 
 qboolean SVC_RateLimit( leakyBucket_t *bucket, int burst, int period );
 qboolean SVC_RateLimitAddress( netadr_t from, int burst, int period );
+qboolean SVC_RateLimitQueryAddress( netadr_t from, int burst, int period );
 
 void SV_FinalMessage (const char *message);
 void QDECL SV_SendServerCommand( client_t *cl, const char *fmt, ...) Q_PRINTF_FUNC(2, 3);
@@ -502,6 +505,7 @@ void SV_AddSvsTimeFixup( int *piTime );
 void SV_SetConfigstring( int index, const char *val );
 char *SV_GetConfigstring( int index );
 int SV_FindIndex( const char *name, int start, int max, qboolean create );
+void SV_FindIndexCacheChanged( int index );
 int SV_ModelIndex( const char *name );
 void SV_ClearModel( int index );
 int SV_SoundIndex( const char *name, qboolean streamed );

@@ -1175,6 +1175,7 @@ const char* Z_NumberStringPointer(int iNum);
 // commandLine should not include the executable name (argv[0])
 void Com_Init( char *commandLine );
 void Com_Frame( void );
+void Com_ResetFrameTime( void );
 void Com_Shutdown( void );
 
 qboolean Com_SanitizeName( const char *pszOldName, char *pszNewName, size_t bufferSize );
