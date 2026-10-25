@@ -26,6 +26,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 
 class dtNavMesh;
 class dtPathCorridor;
+class dtQueryFilter;
 class NavigationMap;
 struct DetourData;
 
@@ -63,7 +64,8 @@ public:
     virtual bool    IsQuerying() const override;
 
 private:
-    void ResetPosition(const Vector& origin);
+    void                 ResetPosition(const Vector& origin);
+    const dtQueryFilter *PathFilter();
 
 private:
     DetourData *detourData;
@@ -79,7 +81,7 @@ private:
 class RecastPathMaster
 {
 public:
-    void PostLoadNavigation(const NavigationMap& map);
+    void PostLoadNavigation(NavigationMap& map);
     void ClearNavigation();
     void Update();
 };

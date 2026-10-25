@@ -37,6 +37,7 @@ public:
         float  fLeashRadius  = 0.0f,
         float  fMinTravelDistance = 0.0f
     );
+    bool Wander(float fRadius, float fMinTravelDistance = 320.0f);
     void MoveNear(Vector vNear, float fRadius, float *vLeashHome = NULL, float fLeashRadius = 0.0f);
     void MoveTo(Vector vPos, float *vLeashHome = NULL, float fLeashRadius = 0.0f);
 

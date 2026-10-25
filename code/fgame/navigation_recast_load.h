@@ -40,6 +40,7 @@ struct rcPolyMesh;
 struct rcPolyMeshDetail;
 struct offMeshNavigationPoint;
 class INavigationMapExtension;
+typedef unsigned int dtPolyRef;
 
 /**
  * @brief Full navigation map with meshes and tiles.
@@ -111,7 +112,19 @@ public:
      */
     void Update();
 
+    /**
+     * @brief Flood-label connected polygon components after mesh load.
+     */
+    void LabelConnectedRegions();
+
+    /**
+     * @brief Connected-component id for a poly (0 = unknown / unlabeled).
+     */
+    unsigned short GetPolyRegion(dtPolyRef ref) const;
+
 private:
+    void ClearPolyRegions();
+
     void GatherOffMeshPoints(Container<offMeshNavigationPoint>& points, const rcPolyMesh *polyMesh);
     void GeneratePolyMesh(
         RecastBuildContext& buildContext,
@@ -150,11 +163,19 @@ private:
     void BuildWorldMesh(RecastBuildContext& buildContext, const navMap_t& navigationMap);
     void BuildMeshesForEntities(RecastBuildContext& buildContext, const navMap_t& navigationMap);
 
+    bool TryLoadNavMeshCache(const char *mapname);
+    void SaveNavMeshCache(const char *mapPath, const unsigned char *navData, int navDataSize);
+
 private:
     dtNavMesh      *navMeshDt;
     dtNavMeshQuery *navMeshQuery;
     dtQueryFilter  *queryFilter;
     NavigationBSP   navigationData;
+
+    // Per-tile connected-region ids (1-based); indexed like Detour tile index.
+    unsigned short **polyRegions;
+    int             *polyRegionCounts;
+    int              polyRegionMaxTiles;
 
 public:
     float          *offMeshConVerts;

@@ -49,6 +49,10 @@ namespace NavigationMapConfiguration
     static const float detailSampleMaxError = 1.3f;
 } // namespace NavigationMapConfiguration
 
+// Disk cache format + Recast/Detour build identity. Bump on any
+// NavigationMapConfiguration / extension / InitializeNavMesh / header change.
+static constexpr unsigned int NAVMESH_CACHE_VERSION = 1;
+
 // Polyflags
 static constexpr unsigned int RECAST_POLYFLAG_WALKABLE = (1 << 0);
 static constexpr unsigned int RECAST_POLYFLAG_BUSY     = (1 << 1);

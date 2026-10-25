@@ -23,6 +23,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #pragma once
 
 #include "g_local.h"
+#include "g_main.h"
 #include "navigation_recast_obstacle.h"
 #include "navigation_recast_load.h"
 #include "navigation_recast_config.h"
@@ -363,12 +364,25 @@ void NavigationObstacleMap::Update()
     }
     nextUpdateTime = level.inttime + OBSTACLE_UPDATE_INTERVAL;
 
-    for (i = 0; i < MAX_GENTITIES; i++) {
-        ent = &g_entities[i];
+    // Prefer the active list for add/change. Stamp slots we saw so removals
+    // (freed or left the active list) are still detected without a full IsValid
+    // scan of empty slots.
+    static unsigned int visitStamp[MAX_GENTITIES];
+    static unsigned int currentStamp = 1;
 
-        if (i == ENTITYNUM_WORLD) {
+    currentStamp++;
+    if (currentStamp == 0) {
+        memset(visitStamp, 0, sizeof(visitStamp));
+        currentStamp = 1;
+    }
+
+    for (ent = active_edicts.next; ent != &active_edicts; ent = ent->next) {
+        i = ent - g_entities;
+        if (i == ENTITYNUM_WORLD || i < 0 || i >= MAX_GENTITIES) {
             continue;
         }
+
+        visitStamp[i] = currentStamp;
 
         if (IsValidEntity(ent)) {
             if (!ents->IsActive(i)) {
@@ -380,23 +394,21 @@ void NavigationObstacleMap::Update()
             EntityRemoved(ent);
         }
     }
+
+    for (i = 0; i < MAX_GENTITIES; i++) {
+        if (i == ENTITYNUM_WORLD) {
+            continue;
+        }
+        if (ents->IsActive(i) && visitStamp[i] != currentStamp) {
+            EntityRemoved(&g_entities[i]);
+        }
+    }
 }
 
 bool NavigationObstacleMap::IsValidEntity(gentity_t *ent) const
 {
     if (!ent->inuse || !ent->entity) {
         return false;
-    }
-
-    if (!IsSpecialEntity(ent)) {
-        if (ent->s.solid == SOLID_NOT || ent->s.solid == SOLID_TRIGGER) {
-            return false;
-        }
-
-        // Same contents as player's clipmask
-        if (!(ent->r.contents & MASK_PLAYERSOLID)) {
-            return false;
-        }
     }
 
     // Ignore other sentients
@@ -409,7 +421,14 @@ bool NavigationObstacleMap::IsValidEntity(gentity_t *ent) const
         return false;
     }
 
-    return true;
+    // A solid entity with the player's clip contents counts on its own;
+    // only otherwise does the (slower) special-entity test decide.
+    // Same answer as testing IsSpecialEntity first: every test is pure.
+    if (ent->s.solid != SOLID_NOT && ent->s.solid != SOLID_TRIGGER && (ent->r.contents & MASK_PLAYERSOLID)) {
+        return true;
+    }
+
+    return IsSpecialEntity(ent);
 }
 
 bool NavigationObstacleMap::HasChanged(gentity_t *ent) const

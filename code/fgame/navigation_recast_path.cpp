@@ -53,6 +53,18 @@ static dtQueryFilter QueryFilterForPath(bool allowLadders)
     return filter;
 }
 
+// True when a Recast-space point is closer (XY) to start than minTravel.
+static bool BelowMinTravel(const vec3_t recastPos, const Vector& start, float minTravel)
+{
+    Vector gamePos;
+
+    if (minTravel <= 0.0f) {
+        return false;
+    }
+    ConvertRecastToGameCoord(recastPos, gamePos);
+    return (gamePos - start).lengthXYSquared() < Square(minTravel);
+}
+
 struct DetourData {
 public:
     dtPathCorridor corridor;
@@ -60,6 +72,9 @@ public:
     unsigned char  cornerFlags[4];
     dtPolyRef      cornerPolys[4];
     int            ncorners;
+    dtQueryFilter  pathFilter;
+    bool           pathFilterValid;
+    bool           pathFilterAllowLadders;
 };
 
 RecastPather::RecastPather()
@@ -69,6 +84,19 @@ RecastPather::RecastPather()
 {
     detourData = new DetourData();
     detourData->corridor.init(256);
+    detourData->ncorners               = 0;
+    detourData->pathFilterValid        = false;
+    detourData->pathFilterAllowLadders = true;
+}
+
+const dtQueryFilter *RecastPather::PathFilter()
+{
+    if (!detourData->pathFilterValid || detourData->pathFilterAllowLadders != allowLadders) {
+        detourData->pathFilter             = QueryFilterForPath(allowLadders);
+        detourData->pathFilterAllowLadders = allowLadders;
+        detourData->pathFilterValid        = true;
+    }
+    return &detourData->pathFilter;
 }
 
 RecastPather::~RecastPather()
@@ -155,11 +183,16 @@ void RecastPather::FindPathNear(
         return;
     }
 
-    // Now find a point within this radius
+    // Now find a point within this radius (stays in the start poly's connected set).
     if (navigationMap.GetNavMeshQuery()->findRandomPointAroundCircle(
             endRef, endPt, radius, filter, &G_Random, &endRef, endPt
         ) != DT_SUCCESS
         || !endRef) {
+        return;
+    }
+
+    // cheap pre-check on the sampled point before running the search
+    if (BelowMinTravel(endPt, start, parameters.minTravelDistance)) {
         return;
     }
 
@@ -180,6 +213,11 @@ void RecastPather::FindPathNear(
             VectorCopy(endPt, closestPos);
         }
 
+        // a partial path can stop short of the sampled point
+        if (BelowMinTravel(closestPos, start, parameters.minTravelDistance)) {
+            return;
+        }
+
         moving = true;
         detourData->corridor.setCorridor(closestPos, polys, nPolys);
     }
@@ -198,9 +236,10 @@ void RecastPather::FindPathAway(
     dtPolyRef     startRef, endRef;
     vec3_t        startPt, endPt;
     dtQueryFilter pathFilter;
-    float         startAngle;
-    float         startPitch;
-    int           i, j;
+    float          startAngle;
+    float          startPitch;
+    int            i, j;
+    unsigned short startRegion;
 
     allowLadders = parameters.allowLadders;
     lastorg = start;
@@ -226,6 +265,8 @@ void RecastPather::FindPathAway(
         return;
     }
 
+    startRegion = navigationMap.GetPolyRegion(startRef);
+
     for (i = 0; i < 36; i++) {
         float angle = startAngle + ((2 * M_PI) * (float)i / (float)36);
         float dx    = cos(angle) * radius;
@@ -237,35 +278,58 @@ void RecastPather::FindPathAway(
             Vector point(recastAvoid[0] + dx, recastAvoid[1] + dy, recastAvoid[2] + dz);
 
             if (navigationMap.GetNavMeshQuery()->findNearestPoly(point, DETOUR_EXTENT, filter, &endRef, endPt)
-                    == DT_SUCCESS
-                && endRef) {
-                dtPolyRef polys[MAX_NPOLYS];
-                int       nPolys = 0;
-                navigationMap.GetNavMeshQuery()->findPath(
-                    startRef, endRef, startPt, endPt, filter, polys, &nPolys, ARRAY_LEN(polys) - 1
-                );
-
-                if (nPolys) {
-                    vec3_t   closestPos;
-                    dtStatus status;
-
-                    if (polys[nPolys - 1] != endRef) {
-                        status = navigationMap.GetNavMeshQuery()->closestPointOnPoly(
-                            polys[nPolys - 1], endPt, closestPos, 0
-                        );
-                        if (dtStatusFailed(status)) {
-                            VectorCopy(endPt, closestPos);
-                        }
-                    } else {
-                        VectorCopy(endPt, closestPos);
-                    }
-
-                    moving = true;
-                    detourData->corridor.setCorridor(closestPos, polys, nPolys);
-                }
-
-                return;
+                    != DT_SUCCESS
+                || !endRef) {
+                continue;
             }
+
+            // Skip islands the bot cannot reach — no A* toward them. Regions
+            // join both ends of every link, so different ids mean no path.
+            if (startRegion) {
+                const unsigned short endRegion = navigationMap.GetPolyRegion(endRef);
+
+                if (endRegion && endRegion != startRegion) {
+                    continue;
+                }
+            }
+
+            // cheap pre-check on the candidate before running the search
+            if (BelowMinTravel(endPt, start, parameters.minTravelDistance)) {
+                continue;
+            }
+
+            dtPolyRef polys[MAX_NPOLYS];
+            int       nPolys = 0;
+            navigationMap.GetNavMeshQuery()->findPath(
+                startRef, endRef, startPt, endPt, filter, polys, &nPolys, ARRAY_LEN(polys) - 1
+            );
+
+            if (!nPolys) {
+                continue;
+            }
+
+            vec3_t   closestPos;
+            dtStatus status;
+
+            if (polys[nPolys - 1] != endRef) {
+                status = navigationMap.GetNavMeshQuery()->closestPointOnPoly(
+                    polys[nPolys - 1], endPt, closestPos, 0
+                );
+                if (dtStatusFailed(status)) {
+                    VectorCopy(endPt, closestPos);
+                }
+            } else {
+                VectorCopy(endPt, closestPos);
+            }
+
+            // a partial path can stop short of the candidate
+            if (BelowMinTravel(closestPos, start, parameters.minTravelDistance)) {
+                continue;
+            }
+
+            moving = true;
+            detourData->corridor.setCorridor(closestPos, polys, nPolys);
+            return;
         }
     }
 }
@@ -322,8 +386,7 @@ static bool overOffmeshConnection(
 
 void RecastPather::UpdatePos(const Vector& origin)
 {
-    dtQueryFilter pathFilter = QueryFilterForPath(allowLadders);
-    const dtQueryFilter *filter = &pathFilter;
+    const dtQueryFilter *filter = PathFilter();
     const Vector velocity = (origin - lastorg) * (1.0 / level.frametime);
     const float distSqr = Q_min(Square(64), velocity.lengthSquared());
 
@@ -561,8 +624,7 @@ bool RecastPather::IsQuerying() const
 
 void RecastPather::ResetPosition(const Vector& origin)
 {
-    dtQueryFilter pathFilter = QueryFilterForPath(allowLadders);
-    const dtQueryFilter *filter = &pathFilter;
+    const dtQueryFilter *filter = PathFilter();
     vec3_t agentPos;
 
     traversingOffMeshLink = false;
@@ -593,7 +655,11 @@ void RecastPather::ResetPosition(const Vector& origin)
     }
 }
 
-void RecastPathMaster::PostLoadNavigation(const NavigationMap& map) {}
+void RecastPathMaster::PostLoadNavigation(NavigationMap& map)
+{
+    // Label after build and after successful cache load (both call here).
+    map.LabelConnectedRegions();
+}
 
 void RecastPathMaster::ClearNavigation() {}
 
