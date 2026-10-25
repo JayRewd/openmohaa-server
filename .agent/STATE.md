@@ -5,8 +5,9 @@ Reconciled: 2026-10-25
 ## Active task
 
 Server optimization pass that stock-client players must not notice.
-Reviewed and finalized in the working tree; **uncommitted on purpose** (the
-owner commits it). The packet-demo feature (D-011) is planned only; no code.
+On `origin/main`, rewritten on 2026-10-25 to fold the review fixes into the
+commits they correct (D-016); not yet in a PR to `upstream`. The
+packet-demo feature (D-011) is planned only; no code.
 
 ## Why this serves the goal
 
@@ -16,9 +17,11 @@ query floods) without changing what clients receive.
 
 ## Status
 
-`main` equals `origin/main` and `upstream/main` (`f680c87`). Remotes:
-`origin` = `JayRewd/openmohaa-server` (fork, push target); `upstream` =
-`pstngh/openmohaa-server` (PR base). Everything below is uncommitted.
+`main` equals `origin/main` after the 2026-10-25 rewrite; ahead of
+`upstream/main` (`f680c87`) by the 10 optimization commits. Clones and
+deployments made from the old `origin/main` must reset to it. Remotes: `origin` =
+`JayRewd/openmohaa-server` (fork); `upstream` = `pstngh/openmohaa-server`
+(PR base). Untracked only: `.cmake/`, `.cursor/`.
 
 ### In the tree (kept)
 
@@ -30,8 +33,9 @@ query floods) without changing what clients receive.
 - Per-Listener pending-event count short-circuits cancel/pending scans.
 - State machines: resolved next-state pointers and pretokenized commands.
 - FFA: score string cached per frame; top score computed once per frame.
-- Footstep/AI-event work skipped when no Actor exists and `sv_netoptimize`
-  is off (its only outputs feed Actors and that cvar's sounds).
+- AI events skipped when no Actor exists; with `sv_netoptimize` off,
+  `FootstepMain` only makes stock's equipment `random()` roll (step detection
+  and the foot trace still run, so the `rand()` stream matches stock).
 - `CanFall` trace moved from every frame into its conditional.
 - Stack `EV_Touch` events; `CalcBlend` skips `pointcontents` when unused.
 - Regular bots added/removed one per 250 ms.
@@ -55,7 +59,7 @@ query floods) without changing what clients receive.
 - `TouchStuff`: stock skips touch index > entity number; kept as O(1) check.
 - SMG bots: combat retry back to 100 ms; jump/edge probes every frame again.
 
-### Fight-load pass (2026-10-25, uncommitted)
+### Fight-load pass (2026-10-25)
 
 Profiled a bot fight first, then kept only exact equivalences (D-013):
 
@@ -77,7 +81,7 @@ Profiled a bot fight first, then kept only exact equivalences (D-013):
   roombas as stand-in clients with simulated delta snapshots and CGMs,
   gperftools profiler. Effect: about 20% less server time per frame.
 
-### Fight-load pass 2 (2026-10-25, uncommitted)
+### Fight-load pass 2 (2026-10-25)
 
 Owner's target: slowest frame 0.8–1.2 ms on the 40-bot bench, Release build,
 exact changes only (no PGO). Per-frame phase timers showed snapshot sending
@@ -111,6 +115,68 @@ exact changes only (no PGO). Per-frame phase timers showed snapshot sending
   call stacks misattribute (SMG-bot work showed up under roombas). Trust
   self time, or time code directly.
 
+### Audit leftovers (2026-10-25)
+
+The owner's two audit lists were checked against the tree; almost all
+items were already done. The rest, measured on the live-like bench:
+
+- Kept: `-fno-semantic-interposition` for GCC builds of the game module
+  (`cmake/basegame.cmake`). 3 pairs: average 0.58 -> 0.55 ms, p99 0.96 ->
+  0.88 ms, frames over 1.2 ms 22 -> 5. `GetGameAPI` stays exported.
+- Kept: "Server frame overran: N ms" in the server log next to `svlag`
+  (already once per 2.5 s); not exercised at runtime (no overrun occurred).
+- Kept, exact: `CheckEndMatch` re-fetches `fraglimit`/`timelimit` only
+  after clamping; one shared `dtQueryFilter` per ladder setting for path
+  searches (checked byte for byte through a fight); the parsed BSP
+  triangles are freed after a navmesh build outside developer mode.
+- Not kept: sleeping the full frame wait instead of spinning the last
+  millisecond. Idle CPU 1.89% -> 0.08% of a core, but in fights the core
+  cools between frames: 6 pairs averaged 0.66 -> 0.69 ms and had more
+  frames over 1.2 ms. Owner to decide; reverted for now.
+- Not changed: SMG-bot jump/edge probes cost ~0.027 ms/frame for 20 bots
+  (a 100 ms cadence would save ~0.013), and the 100 ms stuck retry fires
+  0-7 times per 10 s; both below the bar for a timing change.
+- Kept, exact: snapshot entity pre-pass (`sv_snapshot.c`). The first
+  snapshot in each `SV_SendClientMessages` pass lists the entities that pass
+  the client-independent checks (and sets `SVF_SENT` as the full loop
+  would); later clients walk that list (191 of 339 entities on mohdm6).
+  Other callers and a cut-short pass (`SV_SnapshotListReset` in
+  `SV_Shutdown`/`SV_SpawnServer`) use the full loop. Checked against a fresh
+  recompute 80,000 times; 3 pairs: p99 1.24 -> 1.21 ms, frames over 1.2 ms
+  62 -> 47, average unchanged.
+- Skipped by owner or rule: `-march`, far-sound culling, `_IOLBF` (a log
+  line is already one write).
+- Ops advice (no code): `sv_minRate`/`sv_maxRate` 25000+, `logfile 1`,
+  `com_speeds 1` briefly to measure, `TZ=:/etc/localtime`, restart before
+  23 days of uptime.
+
+### Review fixes (2026-10-25, folded into the commits they correct)
+
+A full review of the 10 commits not in `upstream/main` found 11 issues; the
+owner asked for 1-7, with 2 evaluated first:
+
+1. Region labels are now a union-find over every navmesh link taken as
+   undirected (fall/high-ledge off-mesh links are one-way). The old forward
+   flood skipped 0 reachable candidates in 400 skips on mohdm6/mohdm2, so it
+   was latent; the check build confirmed every new skip is unreachable.
+2. FFA score cache kept: `score` requests come at most every 2 s per client
+   and only between frames, so a reused string is at most one 50 ms frame
+   older than a fresh one. Comment corrected; no code change.
+3. GameSpy queries have their own rate-limit bucket pool (`queryPool`,
+   `SVC_RateLimitQueryAddress`), global cap 30 burst then 20/s. Tested:
+   before, a 50-query burst from one IP made the server drop that IP's
+   `getchallenge`; now it is answered.
+4. Minimum travel distance for SMG-bot moves is again checked on the final
+   destination in `AvoidPath`/`Wander` (any pather) and on `closestPos` in
+   the Recast searches.
+5. Footstep path restored except the content/sound-name work (see above).
+6. "population fill needs" printed once per change (was ~97 lines per fill).
+7. Navmesh cache header: map name end found with `memchr` inside the field;
+   two corrupt-header cases added to `test_navmesh_cache`.
+
+RNG: the stream matches stock except where SMG-bot behavior was changed on
+purpose (wander, pacing), i.e. only when SMG bots are enabled.
+
 ## Remaining
 
 Audit recommendations that need an owner decision or game assets:
@@ -126,8 +192,8 @@ Audit recommendations that need an owner decision or game assets:
   multiplayer map, not only single-player ones as documented.
 - SP taunts: if the stock taunt aliases are streamed, their first use on an
   SP map adds a sound configstring mid-game (confirm with the game files).
-- SMG bots: fire while still turning. The navmesh is now cached on disk
-  (uncommitted), but still built on a cache miss.
+- SMG bots: fire while still turning. The navmesh is now cached on disk,
+  but still built on a cache miss.
 - Roombas: a visible but unreachable target locks them; obituary lines are
   no longer logged; names shift after a bot is kicked; `sv_maxclients` cannot
   be lowered while bots hold top slots.
@@ -197,11 +263,15 @@ Audit recommendations that need an owner decision or game assets:
   bits, snapshot sort and obstacle validity; no differences. CTest 4/4.
 - Smoke test on `dm/mohdm6` with stock Pak files: clean start and shutdown;
   first load writes the navmesh cache, second load hits it (0.65 s → 0.03 s).
-- Not run: SMG bots with humans connected, live stock-client session.
+- Review fixes: check build confirmed every region skip unreachable and
+  every accepted SMG-bot move past its minimum; live UDP test showed a
+  50-query GameSpy burst no longer blocks that IP's `getchallenge`; the
+  bot-fill warning prints once (was ~97 times). CTest 4/4.
+- Owner played a local mohdm6 session with 5 roombas and 5 SMG bots
+  (2026-10-25) and reported nothing wrong. Not run: the live server.
 
 ## Exact next action
 
-Owner reviews `git diff` and commits to `origin` (the JayRewd fork), then
-opens a PR to `upstream` (`pstngh/openmohaa-server`) if desired. Then test on
-the live server with a stock client: join, map change, explosions, bots
-roaming and jumping.
+Open a PR from `origin` (`JayRewd`) to `upstream` (`pstngh/openmohaa-server`)
+if desired. Then test on the live server with a stock client: join, map
+change, explosions, bots roaming and jumping.

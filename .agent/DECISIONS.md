@@ -117,3 +117,28 @@ fight and aborts on any difference. The `SV_Trace` entity-box bound failed
 that check (deep traces can hit outside an entity's link box), so traces
 stay stock. Idle-time costs that would shift frame timing (the main loop's
 last-millisecond spin) are left alone.
+
+## D-014: The frame pacer keeps its last-millisecond spin for now
+
+Sleeping the whole wait cut idle CPU from 1.89% to 0.08% of a core, but in
+bot fights frames ran slower and crossed 1.2 ms more often (the core
+leaves its warm state between frames). Worst-frame time is the owner's
+target, so the stock spin stays unless the owner prefers idle CPU (for
+example on a shared VPS).
+
+## D-015: Exactness has two stated limits
+
+Two optimizations are not bit-identical to stock, by choice. The FFA score
+cache can hand a client a scoreboard up to one 50 ms frame older than a
+fresh build (clients refresh every 2 s, so it cannot be seen). The SMG-bot
+behavior changes (wander, region skips, one bot change per 250 ms) move the
+shared `rand()` stream, which only matters when SMG bots are enabled.
+Everything else, including footsteps, keeps stock's output and RNG order.
+
+## D-016: Review fixes folded into the commits they correct
+
+At the owner's request (2026-10-25), the fixes from the full review were
+folded into their original commits with fixup/amend commits and an
+autosquash rebase, so each commit is correct on its own before the PR to
+`upstream`. Every rewritten commit was rebuilt and unit-tested, and
+`origin/main` was force-pushed with `--force-with-lease`.
