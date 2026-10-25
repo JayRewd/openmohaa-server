@@ -39,6 +39,33 @@ void	Huff_putBit( int bit, byte *fout, int *offset) {
 	*offset = bloc;
 }
 
+/* Write the low n bits of value at bit b, lowest bit first, up to a byte at
+   a time. Same buffer contents as n single-bit writes: a byte is cleared when
+   writing starts at its bit 0, then bits are OR'd in. */
+static inline int put_bits(unsigned int value, int n, byte *fout, int b) {
+	while (n > 0) {
+		int pos = b & 7;
+		int take = 8 - pos;
+
+		if (take > n) {
+			take = n;
+		}
+		if (pos == 0) {
+			fout[b >> 3] = 0;
+		}
+		fout[b >> 3] |= (byte)((value & ((1u << take) - 1)) << pos);
+		value >>= take;
+		b += take;
+		n -= take;
+	}
+	return b;
+}
+
+void	Huff_putBits( unsigned int value, int n, byte *fout, int *offset) {
+	bloc = put_bits(value, n, fout, *offset);
+	*offset = bloc;
+}
+
 int		Huff_getBloc(void)
 {
 	return bloc;
@@ -337,6 +364,75 @@ void Huff_transmit (huff_t *huff, int ch, byte *fout, int maxoffset) {
 void Huff_offsetTransmit (huff_t *huff, int ch, byte *fout, int *offset, int maxoffset) {
 	bloc = *offset;
 	send(huff->loc[ch], NULL, fout, maxoffset);
+	*offset = bloc;
+}
+
+void Huff_BuildCodeTable (const huff_t *huff, huffCodeTable_t *table) {
+	int ch;
+
+	for (ch = 0; ch < HMAX; ch++) {
+		const node_t	*node = huff->loc[ch];
+		unsigned int	leafFirst = 0;
+		int				depth = 0;
+		int				i;
+
+		table->length[ch] = -1;
+		table->bits[ch] = 0;
+
+		if (!node) {
+			continue;
+		}
+
+		// collect the branch bits from the leaf up to the root
+		for (; node->parent; node = node->parent) {
+			if (depth >= 32) {
+				break;
+			}
+			if (node->parent->right == node) {
+				leafFirst |= 1u << depth;
+			}
+			depth++;
+		}
+
+		if (node->parent) {
+			continue;	// deeper than 32 bits: keep the tree walk
+		}
+
+		// send() emits root first, so reverse the order
+		for (i = 0; i < depth; i++) {
+			if (leafFirst & (1u << (depth - 1 - i))) {
+				table->bits[ch] |= 1u << i;
+			}
+		}
+		table->length[ch] = depth;
+	}
+	table->built = qtrue;
+}
+
+void Huff_offsetTransmitCode (const huffCodeTable_t *table, huff_t *huff, int ch, byte *fout, int *offset, int maxoffset) {
+	int				length = table->length[ch];
+	unsigned int	bits = table->bits[ch];
+
+	if (!table->built || length < 0) {
+		Huff_offsetTransmit(huff, ch, fout, offset, maxoffset);
+		return;
+	}
+
+	bloc = *offset;
+	if (length > 0) {
+		// send() checks the limit before every bit, so it writes the bits
+		// that fit and then parks the offset at maxoffset + 1
+		int avail = maxoffset - bloc;
+
+		if (avail >= length) {
+			bloc = put_bits(bits, length, fout, bloc);
+		} else {
+			if (avail > 0) {
+				bloc = put_bits(bits, avail, fout, bloc);
+			}
+			bloc = maxoffset + 1;
+		}
+	}
 	*offset = bloc;
 }
 
