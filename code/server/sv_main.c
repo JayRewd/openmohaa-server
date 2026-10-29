@@ -70,6 +70,7 @@ cvar_t	*sv_netprofile;
 cvar_t	*sv_netprofileoverlay;
 cvar_t	*sv_netoptimize;
 cvar_t	*sv_netoptimize_vistime;
+cvar_t	*sv_frameStats;
 cvar_t	*g_netoptimize;
 cvar_t	*g_gametype;
 cvar_t	*g_gametypestring;
@@ -894,10 +895,10 @@ void SV_ConnectionlessPacket( netadr_t from, msg_t *msg ) {
 
 /*
 =================
-SV_ReadPackets
+SV_ProcessPacket
 =================
 */
-void SV_PacketEvent( netadr_t from, msg_t *msg ) {
+static void SV_ProcessPacket( netadr_t from, msg_t *msg ) {
 	int			i;
 	client_t	*cl;
 	int			qport;
@@ -952,6 +953,114 @@ void SV_PacketEvent( netadr_t from, msg_t *msg ) {
 	// if we received a sequenced packet from an address we don't recognize,
 	// send an out of band disconnect packet to it
 	SV_NET_OutOfBandPrint( &svs.netprofile, from, "disconnect" );
+}
+
+/*
+=================
+Frame stats
+
+With sv_frameStats N (seconds, 0 = off), print one line every N seconds
+while humans are connected: how long the main thread worked per server
+tick, split into SV_Frame and the packets handled since the previous
+tick (client moves run there). It shows how much of the tick budget is
+left when the server is full.
+=================
+*/
+static struct {
+	int64_t	reportStart;
+	int64_t	tickPacketUsec;
+	int64_t	frameUsec, packetUsec, workUsec;
+	int64_t	maxFrameUsec, maxPacketUsec, maxWorkUsec;
+	int		ticks, slowTicks, packets;
+} frameStats;
+
+static void SV_ReportFrameStats( int64_t now ) {
+	int			i;
+	client_t	*cl;
+	int			humans, bots;
+	float		seconds;
+
+	humans = bots = 0;
+	for ( i = 0, cl = svs.clients; i < svs.iNumClients; i++, cl++ ) {
+		if ( cl->state != CS_ACTIVE ) {
+			continue;
+		}
+		if ( cl->netchan.remoteAddress.type == NA_BOT ) {
+			bots++;
+		} else {
+			humans++;
+		}
+	}
+	if ( !humans || !frameStats.ticks ) {
+		return;
+	}
+	// regular bots live in game-only slots above sv_maxclients
+	for ( i = svs.iNumClients; sv.state == SS_GAME && i < sv.num_entities; i++ ) {
+		gentity_t *ent = SV_GentityNum( i );
+		if ( ent->inuse && ent->client ) {
+			bots++;
+		}
+	}
+
+	seconds = ( now - frameStats.reportStart ) / 1000000.0f;
+	Com_Printf( "Server frame stats: %d humans, %d bots, %d ticks in %.0f s; "
+		"work per tick avg %.1f ms, max %.1f ms (frame %.1f/%.1f, packets %.1f/%.1f), "
+		"%d over half the tick; %.0f packets/s\n",
+		humans, bots, frameStats.ticks, seconds,
+		frameStats.workUsec / 1000.0f / frameStats.ticks, frameStats.maxWorkUsec / 1000.0f,
+		frameStats.frameUsec / 1000.0f / frameStats.ticks, frameStats.maxFrameUsec / 1000.0f,
+		frameStats.packetUsec / 1000.0f / frameStats.ticks, frameStats.maxPacketUsec / 1000.0f,
+		frameStats.slowTicks, frameStats.packets / seconds );
+}
+
+static void SV_UpdateFrameStats( int64_t frameStart, int frameMsec ) {
+	int64_t now = Sys_Microseconds();
+	int64_t frameUsec = now - frameStart;
+	int64_t workUsec = frameUsec + frameStats.tickPacketUsec;
+
+	if ( sv_frameStats->modified ) {
+		sv_frameStats->modified = qfalse;
+		Com_Memset( &frameStats, 0, sizeof( frameStats ) );
+		frameStats.reportStart = now;
+		return;
+	}
+
+	frameStats.ticks++;
+	frameStats.frameUsec += frameUsec;
+	frameStats.packetUsec += frameStats.tickPacketUsec;
+	frameStats.workUsec += workUsec;
+	frameStats.maxFrameUsec = MAX( frameStats.maxFrameUsec, frameUsec );
+	frameStats.maxPacketUsec = MAX( frameStats.maxPacketUsec, frameStats.tickPacketUsec );
+	frameStats.maxWorkUsec = MAX( frameStats.maxWorkUsec, workUsec );
+	if ( workUsec * 2 > frameMsec * 1000 ) {
+		frameStats.slowTicks++;
+	}
+	frameStats.tickPacketUsec = 0;
+
+	if ( now - frameStats.reportStart >= sv_frameStats->integer * (int64_t)1000000 ) {
+		SV_ReportFrameStats( now );
+		Com_Memset( &frameStats, 0, sizeof( frameStats ) );
+		frameStats.reportStart = now;
+	}
+}
+
+/*
+=================
+SV_PacketEvent
+=================
+*/
+void SV_PacketEvent( netadr_t from, msg_t *msg ) {
+	int64_t start;
+
+	if ( sv_frameStats->integer <= 0 ) {
+		SV_ProcessPacket( from, msg );
+		return;
+	}
+
+	start = Sys_Microseconds();
+	SV_ProcessPacket( from, msg );
+	frameStats.tickPacketUsec += Sys_Microseconds() - start;
+	frameStats.packets++;
 }
 
 
@@ -1165,6 +1274,7 @@ happen before SV_Frame is called
 void SV_Frame( int msec ) {
 	int		frameMsec;
 	int		startTime;
+	int64_t	frameStart;
 
 	// the menu kills the server with this cvar
 	if ( sv_killserver->integer ) {
@@ -1190,6 +1300,8 @@ void SV_Frame( int msec ) {
 	if ( SV_CheckPaused() ) {
 		return;
 	}
+
+	frameStart = sv_frameStats->integer > 0 ? Sys_Microseconds() : 0;
 
 	// if it isn't time for the next frame, do nothing
 	if ( sv_fps->integer < 1 ) {
@@ -1294,6 +1406,10 @@ void SV_Frame( int msec ) {
 	SV_HandleNonPVSSound();
 
 	svs.lastTime = svs.time;
+
+	if ( frameStart ) {
+		SV_UpdateFrameStats( frameStart, frameMsec );
+	}
 }
 
 /*

@@ -541,6 +541,15 @@ int Sys_Milliseconds (void)
 	return curtime;
 }
 
+/* Monotonic microseconds from an arbitrary base. */
+int64_t Sys_Microseconds (void)
+{
+	struct timespec tp;
+
+	clock_gettime(CLOCK_MONOTONIC, &tp);
+	return (int64_t)tp.tv_sec * 1000000 + tp.tv_nsec / 1000;
+}
+
 /*
 ==================
 Sys_RandomBytes
