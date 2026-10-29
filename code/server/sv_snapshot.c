@@ -1519,6 +1519,7 @@ void SV_SendClientMessages(void)
 {
 	int				i;
 	int				rate;
+	int				sequence;
 	client_t		*c;
 
 	SV_DeltaCacheNewFrame();
@@ -1548,6 +1549,7 @@ void SV_SendClientMessages(void)
 		if(c->netchan.unsentFragments || c->netchan_start_queue)
 		{
 			c->rateDelayed = qtrue;
+			SV_FrameStatsSnapshot(c, SNAPSTAT_HELD_FRAGMENTS, 0);
 			continue;		// Drop this snapshot if the packet queue is still full or delta compression will break
 		}
 
@@ -1561,14 +1563,17 @@ void SV_SendClientMessages(void)
 			{
 				// Not enough time since last packet passed through the line
 				c->rateDelayed = qtrue;
+				SV_FrameStatsSnapshot(c, SNAPSTAT_HELD_RATE, 0);
 				continue;
 			}
 		}
 
 		// generate and send a new message
+		sequence = c->netchan.outgoingSequence;
 		SV_SendClientSnapshot(c);
 		c->lastSnapshotTime = svs.time;
 		c->rateDelayed = qfalse;
+		SV_FrameStatsSnapshot(c, SNAPSTAT_SENT, c->frames[sequence & PACKET_MASK].messageSize);
     }
 
 	snapshotListActive = qfalse;

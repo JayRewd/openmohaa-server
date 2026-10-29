@@ -964,6 +964,10 @@ while humans are connected: how long the main thread worked per server
 tick, split into SV_Frame and the packets handled since the previous
 tick (client moves run there). It shows how much of the tick budget is
 left when the server is full.
+
+A second line counts the snapshots that were due for each client and how
+many were held back (choke) by the client's rate or by a packet that is
+still going out in fragments.
 =================
 */
 static struct {
@@ -972,7 +976,66 @@ static struct {
 	int64_t	frameUsec, packetUsec, workUsec;
 	int64_t	maxFrameUsec, maxPacketUsec, maxWorkUsec;
 	int		ticks, slowTicks, packets;
+	int		snapSent, snapHeldRate, snapHeldFragments;
+	int64_t	snapBytes;
+	int		snapMaxBytes;
+	int		clientDue[MAX_CLIENTS], clientHeld[MAX_CLIENTS];
 } frameStats;
+
+void SV_FrameStatsSnapshot( const client_t *client, snapStat_t stat, int bytes ) {
+	int clientNum;
+
+	if ( sv_frameStats->integer <= 0 ) {
+		return;
+	}
+
+	clientNum = client - svs.clients;
+	frameStats.clientDue[clientNum]++;
+	switch ( stat ) {
+	case SNAPSTAT_SENT:
+		frameStats.snapSent++;
+		frameStats.snapBytes += bytes;
+		frameStats.snapMaxBytes = MAX( frameStats.snapMaxBytes, bytes );
+		break;
+	case SNAPSTAT_HELD_RATE:
+		frameStats.snapHeldRate++;
+		frameStats.clientHeld[clientNum]++;
+		break;
+	case SNAPSTAT_HELD_FRAGMENTS:
+		frameStats.snapHeldFragments++;
+		frameStats.clientHeld[clientNum]++;
+		break;
+	}
+}
+
+static void SV_ReportSnapshotStats( void ) {
+	int		i;
+	int		due, heldClients;
+	float	worst;
+
+	due = frameStats.snapSent + frameStats.snapHeldRate + frameStats.snapHeldFragments;
+	if ( !due ) {
+		return;
+	}
+
+	heldClients = 0;
+	worst = 0;
+	for ( i = 0; i < svs.iNumClients; i++ ) {
+		if ( frameStats.clientHeld[i] ) {
+			heldClients++;
+			worst = MAX( worst, (float)frameStats.clientHeld[i] / frameStats.clientDue[i] );
+		}
+	}
+
+	Com_Printf( "Server snapshot stats: %d sent, %d held by rate (%.1f%%), %d held by fragments (%.1f%%); "
+		"%d players held at least once, worst %.1f%%; size avg %d B, max %d B\n",
+		frameStats.snapSent,
+		frameStats.snapHeldRate, 100.0f * frameStats.snapHeldRate / due,
+		frameStats.snapHeldFragments, 100.0f * frameStats.snapHeldFragments / due,
+		heldClients, 100.0f * worst,
+		frameStats.snapSent ? (int)( frameStats.snapBytes / frameStats.snapSent ) : 0,
+		frameStats.snapMaxBytes );
+}
 
 static void SV_ReportFrameStats( int64_t now ) {
 	int			i;
@@ -1011,6 +1074,7 @@ static void SV_ReportFrameStats( int64_t now ) {
 		frameStats.frameUsec / 1000.0f / frameStats.ticks, frameStats.maxFrameUsec / 1000.0f,
 		frameStats.packetUsec / 1000.0f / frameStats.ticks, frameStats.maxPacketUsec / 1000.0f,
 		frameStats.slowTicks, frameStats.packets / seconds );
+	SV_ReportSnapshotStats();
 }
 
 static void SV_UpdateFrameStats( int64_t frameStart, int frameMsec ) {

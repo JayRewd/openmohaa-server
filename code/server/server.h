@@ -467,6 +467,14 @@ void SV_MasterHeartbeat (void);
 void SV_MasterShutdown (void);
 int SV_RateMsec(client_t *client);
 
+typedef enum {
+	SNAPSTAT_SENT,
+	SNAPSTAT_HELD_RATE,			// the last packet has not cleared the client's rate yet
+	SNAPSTAT_HELD_FRAGMENTS		// a fragmented or queued packet is still going out
+} snapStat_t;
+
+void SV_FrameStatsSnapshot( const client_t *client, snapStat_t stat, int bytes );
+
 void SV_PrintfClient(int clientNum, const char *fmt, ...) Q_PRINTF_FUNC(2, 3);
 void SV_LogPrintfClient(int clientNum, const char *fmt, ...) Q_PRINTF_FUNC(2, 3);
 void SV_BotConnect(int clientNum, const char *userinfo);
