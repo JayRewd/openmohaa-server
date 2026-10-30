@@ -764,6 +764,29 @@ static void SV_FlushRedirect( char *outputbuf ) {
 
 /*
 ===============
+SV_IsLoopbackAddress
+
+127.0.0.0/8 or ::1. The kernel drops packets from the network that carry
+these source addresses, so only a program on this host can use them.
+===============
+*/
+static qboolean SV_IsLoopbackAddress( netadr_t adr ) {
+	static const byte ip6Loopback[16] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1 };
+
+	switch ( adr.type ) {
+	case NA_LOOPBACK:
+		return qtrue;
+	case NA_IP:
+		return adr.ip[0] == 127;
+	case NA_IP6:
+		return !memcmp( adr.ip6, ip6Loopback, sizeof( ip6Loopback ) );
+	default:
+		return qfalse;
+	}
+}
+
+/*
+===============
 SVC_RemoteCommand
 
 An rcon packet arrived from the network.
@@ -773,6 +796,7 @@ Redirect all printfs
 */
 static void SVC_RemoteCommand( netadr_t from, msg_t *msg ) {
 	qboolean	valid;
+	qboolean	limited;
 	char		remaining[1024];
 	// TTimo - scaled down to accumulate, but not overflow anything network wise, print wise etc.
 	// (OOB messages are the bottleneck here)
@@ -780,8 +804,18 @@ static void SVC_RemoteCommand( netadr_t from, msg_t *msg ) {
 	char		sv_outputbuf[SV_OUTPUTBUF_LENGTH];
 	char *cmd_aux;
 
-	// Prevent using rcon as an amplifier and make dictionary attacks impractical
-	if ( SVC_RateLimitAddress( from, 10, 1000 ) ) {
+	// Prevent using rcon as an amplifier and make dictionary attacks impractical.
+	// A guard sidecar on this host checks every player at once, so loopback
+	// gets its own bucket of 50 refilling at 50 a second; everyone else keeps
+	// the per-address bucket of 10 refilling at 1 a second.
+	if ( SV_IsLoopbackAddress( from ) ) {
+		static leakyBucket_t loopbackBucket;
+
+		limited = SVC_RateLimit( &loopbackBucket, 50, 20 );
+	} else {
+		limited = SVC_RateLimitAddress( from, 10, 1000 );
+	}
+	if ( limited ) {
 		Com_DPrintf( "SVC_RemoteCommand: rate limit from %s exceeded, dropping request\n",
 			NET_AdrToString( from ) );
 		return;
