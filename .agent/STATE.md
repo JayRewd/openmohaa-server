@@ -26,8 +26,8 @@ Since the PR #1 merge (`5cc65d2`):
 - `c9aa087` second line: snapshots sent, held by rate, held by fragments,
   worst player, snapshot size.
 - Top speed rounded like AA 1.11 (`bg_speed.h`, always on): SMG 262 and
-  rifles 257 at sv_dmspeedmult 1.1 (were 264 / 258). Built and checked
-  locally; not deployed until the owner says so.
+  rifles 257 at sv_dmspeedmult 1.1 (were 264 / 258). Live since the
+  2026-10-30 04:00 UTC daily reboot (game.so built at `eb1d721`).
 
 The 2026-10-26 packet-demo commits were rolled back by JayRewd on
 2026-10-28 (force-push of both repos to `5cc65d2`), on purpose. JayRewd's
