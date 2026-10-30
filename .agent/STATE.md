@@ -1,27 +1,68 @@
 # Current State
 
-Reconciled: 2026-10-25
+Reconciled: 2026-10-30 (UTC)
 
 ## Active task
 
-Server optimization pass that stock-client players must not notice.
-On `origin/main`, rewritten on 2026-10-25 to fold the review fixes into the
-commits they correct (D-016); not yet in a PR to `upstream`. The
-packet-demo feature (D-011) is planned only; no code.
+Find what players feel as lag when the server is full, by measurement,
+before changing more code. Live since 2026-10-29 14:39:24 UTC: `c9aa087`.
 
 ## Why this serves the goal
 
-Removes recurring server work (navmesh rebuild at every map load, event-queue
-scans, per-client score/top-score rebuilds, idle footstep/AI-event traces,
-query floods) without changing what clients receive.
+Lag-free play with stock clients. The measurements so far say the server
+code keeps up; see "Lag findings" below.
 
 ## Status
 
-`main` equals `origin/main` after the 2026-10-25 rewrite; ahead of
-`upstream/main` (`f680c87`) by the 10 optimization commits. Clones and
-deployments made from the old `origin/main` must reset to it. Remotes: `origin` =
-`JayRewd/openmohaa-server` (fork); `upstream` = `pstngh/openmohaa-server`
-(PR base). Untracked only: `.cmake/`, `.cursor/`.
+This clone's `origin` is `pstngh/openmohaa-server`; `main` = `origin/main`.
+Since the PR #1 merge (`5cc65d2`):
+
+- `9407d96` PM_CmdScale divides by the raw usercmd values like AA 1.11,
+  SH 2.15 and BT 2.40 (backpedal and strafe were 25%/18% too fast, and
+  stock clients mispredicted). `test_pm_cmdscale` pins the stock speeds.
+  OpenMoHAA clients keep the old formula until upstream openmohaa changes.
+- `14c967a` `sv_frameStats` (default 60 s): per-minute main-thread work per
+  tick while humans are connected. Adds `Sys_Microseconds`.
+- `c9aa087` second line: snapshots sent, held by rate, held by fragments,
+  worst player, snapshot size.
+
+The 2026-10-26 packet-demo commits were rolled back by JayRewd on
+2026-10-28 (force-push of both repos to `5cc65d2`), on purpose. JayRewd's
+fork has 4 newer profiler/bench commits (2026-10-29) that are not merged;
+the owner said to ignore them for now.
+
+### Live server and deploys
+
+- VPS `forte-openmohaa` (Debian 13, glibc 2.41, 2 vCPU KVM). Game in
+  `/home/debian/moh`, `mohaa.service`, port 12203, `sv_fps 20`,
+  `sv_maxclients 32`, 5 roombas, up to 11 regular SMG bots below 16 players.
+  `sv_minRate 20000` was added to `main/server_opm.cfg` on 2026-10-29.
+- Builds from a newer distro do not run there (Ubuntu glibc 2.43). Build
+  `omohaaded` on a Debian 13 host (`openmohaa-bot-vps` was used: send the
+  commit with `git archive`, build in /tmp, delete afterwards). `game.so`
+  only changes when game code does.
+- Deploy: back up to `.deploy-backups/prod-pre-<commit>-<ts>/`, stage in
+  `.deploy-stage/<commit>-<date>/`, run `.deploy-stage/smoke.sh` on a spare
+  loopback port, then `mv` the binary into place and restart. A restart
+  disconnects everyone; check the player count first.
+- The VM reboots daily at 00:00 America/New_York (`mohaa-reboot.timer`).
+
+### Lag findings (2026-10-29)
+
+- The VM is paused by the host every day at 02:55-02:57 UTC for 3.5-21 s
+  (kernel `clocksource: Long readout interval`, game hitch warnings), since
+  at least 2026-10-12 and getting longer. Provider side, likely a scheduled
+  backup or snapshot; not fixable in code.
+- Evening of 2026-10-29, peak 26 humans: work per tick avg 6-7 ms at 20-26
+  humans; 15 minutes had a tick over 25 ms, only two over 50 ms (62.9 ms at
+  a map change, 55.5 ms frame time at 22:13 mid-game).
+- Choke for players already in the game is about 1-2% at peak (rate
+  ~0.8-1%, fragments ~0.6-0.8%). Snapshots over 4 KB and players held over
+  half a minute are almost all joiners getting their first full snapshot.
+- CGM buffer overflows (effects dropped for one player, ~1-2 a minute at
+  peak) rise with player count but only loosely with choke; cause open.
+- UDP receive drops happen only during map changes and the VM freeze.
+- Client rates: 94% connect with 20000-30000.
 
 ### In the tree (kept)
 
@@ -226,9 +267,10 @@ Audit recommendations that need an owner decision or game assets:
 - This environment's git access refuses tag pushes and ref deletions (HTTP
   403); pushes to branches, including force-pushes to `main`, work. Auto mode
   also blocks amending a commit that is already pushed.
-- The authoritative live game server is not identified; deployment is outside
-  this change.
 - The SP-map findings need the map files to confirm.
+- The daily 02:55 UTC VM pause needs the owner to check the VPS provider
+  panel (automated backups or snapshots) or open a ticket.
+- What fills the per-client CGM buffer mid-game is not known yet.
 
 ## Verified earlier (committed history)
 
@@ -272,6 +314,7 @@ Audit recommendations that need an owner decision or game assets:
 
 ## Exact next action
 
-Open a PR from `origin` (`JayRewd`) to `upstream` (`pstngh/openmohaa-server`)
-if desired. Then test on the live server with a stock client: join, map
-change, explosions, bots roaming and jumping.
+Read the frame and snapshot stats from more full evenings
+(`journalctl -u mohaa.service --grep "Server (frame|snapshot) stats"`). If
+rate holds stay above ~1-2% at 20+ humans, raise `sv_minRate` (config only);
+if mid-game frame spikes over 40 ms recur, find what that tick ran.

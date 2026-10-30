@@ -142,3 +142,12 @@ folded into their original commits with fixup/amend commits and an
 autosquash rebase, so each commit is correct on its own before the PR to
 `upstream`. Every rewritten commit was rebuilt and unit-tested, and
 `origin/main` was force-pushed with `--force-with-lease`.
+
+## D-017: The live server keeps `developer 1` and `logfile 2`
+
+They look like debug settings, but the `moharena-guard@aa` sidecar on the
+VPS tails `qconsole.log` line by line and parses the `>>>userinfo<<<` line
+that `SV_DirectConnect` prints only with `developer` on (connect and token
+checks). `logfile 2` flushes each line so the sidecar sees it at once.
+Their cost does not line up with frame overruns (checked 2026-10-29), so
+they stay unless the sidecar changes.
