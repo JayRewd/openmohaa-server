@@ -46,8 +46,11 @@ Since the PR #1 merge (`5cc65d2`):
   in this repo; the previous one is in
   `.deploy-backups/prod-pre-1d358bd-20261030T105919Z/`). The guard env
   (`/etc/moharena/guard-aa.env`) has `MOHARENA_AC_AUDIT_INTERVAL=30` and
-  `MOHARENA_GUARD_HEARTBEAT_INTERVAL=60`. First minutes: rcon drops and
-  guard timeouts 0 (were ~36/min), no script errors at map loads.
+  `MOHARENA_GUARD_HEARTBEAT_INTERVAL=60`, and since 11:13:27 UTC
+  `MOHARENA_GUARD_RESOURCES_TICK_INTERVAL=60` (it sends status,
+  serverinfo and 7 cvar reads each tick). Guard rcon: 96/min with 36.5
+  drops/min at ~6 humans before; 61.6/min with none dropped at ~21
+  humans after. No script errors at map loads.
 
 The 2026-10-26 packet-demo commits were rolled back by JayRewd on
 2026-10-28 (force-push of both repos to `5cc65d2`), on purpose. JayRewd's
@@ -295,10 +298,6 @@ Audit recommendations that need an owner decision or game assets:
 - The daily 02:55 UTC VM pause needs the owner to check the VPS provider
   panel (automated backups or snapshots) or open a ticket.
 - What fills the per-client CGM buffer mid-game is not known yet.
-- The guard's resources tick (`MOHARENA_GUARD_RESOURCES_TICK_INTERVAL`,
-  default 5 s) sends status, serverinfo and 7 cvar reads each time; now
-  that they are answered it is the guard's biggest rcon load. Raising it
-  waits for the owner.
 
 ## Verified earlier (committed history)
 
