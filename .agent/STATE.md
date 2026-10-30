@@ -91,6 +91,29 @@ the owner said to ignore them for now.
 - UDP receive drops happen only during map changes and the VM freeze.
 - Client rates: 94% connect with 20000-30000.
 
+### Owner's 0.3 s hangs (2026-10-30, open)
+
+- The owner (in game as `lol`) feels ~0.3 s hangs only when the server is
+  full. Two tcpdump captures on `ens3` (11:43-11:45 UTC with 16 humans;
+  15:18-15:23 with 14-17 humans, `lol` from 15:18:25 to 15:21:43) found the
+  server sending each player a packet every 50 ms (worst 65-74 ms). After
+  reassembling fragments (header: sequence, then `fragmentStart` as a long
+  and `fragmentLength` as a short, no checksum), `lol` never waited more
+  than 100 ms for a snapshot. Their 28 fragmented snapshots were 2 pieces
+  each (+25 ms), and their client sent ~124 packets/s with no pause after
+  the two 1 s pauses while loading. The owner said it was not full enough
+  to feel the hangs then.
+- Other players' longer gaps are on their side: their own input stops for
+  1-3 s, or they have a bad link with many fragmented snapshots.
+- Every player model on the server is precached in `global/DMprecache.scr`
+  except `german_elite_officer` (and `_fps`). 13 joins used it on
+  2026-10-30, so the first such spawn on a map makes every client load
+  it mid-game. That's once per map at most, so it doesn't explain frequent
+  hangs. Not changed.
+- Next test at 20+ humans: the owner turns on `cg_lagometer 1`, notes the
+  time of each hang, and a capture runs meanwhile. Red or yellow snapshot
+  bars mean the network; a clean graph during a freeze means the client.
+
 ### In the tree (kept)
 
 - Navmesh disk cache `navmesh/<map>.bin` (homepath), keyed by BSP length +
@@ -341,7 +364,10 @@ Audit recommendations that need an owner decision or game assets:
 
 ## Exact next action
 
-After a full evening on `e41c1a0`, compare player stall episodes (group
+When the server has 20+ humans and the owner plays with `cg_lagometer 1`,
+capture `udp port 12203` and check their snapshot completion gaps at the
+times they note (see "Owner's 0.3 s hangs"). Separately, after a full
+evening on `1d358bd`, compare player stall episodes (group
 "Delta request from out of date" lines per player, 2 s apart) and the
 ring coverage at 20+ humans with 2026-10-29 (0.63 episodes/min, 0.22 with
 a ring reset). If mid-game frame spikes over 40 ms recur, find what that
