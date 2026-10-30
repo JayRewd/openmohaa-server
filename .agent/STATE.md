@@ -28,6 +28,14 @@ Since the PR #1 merge (`5cc65d2`):
 - Top speed rounded like AA 1.11 (`bg_speed.h`, always on): SMG 262 and
   rifles 257 at sv_dmspeedmult 1.1 (were 264 / 258). Live since the
   2026-10-30 04:00 UTC daily reboot (game.so built at `eb1d721`).
+- `458da3a` snapshot entity ring sized for a full server
+  (`SNAPSHOT_RING_ENTITIES` 256 per client per backup frame, 160 MB);
+  the snapshot stats line ends with how many seconds the ring covers.
+- `e41c1a0` missing TIKI models (players' custom skins) are searched
+  for once per map instead of at every respawn.
+- Live since 2026-10-30 10:14:19 UTC (`omohaaded` at `e41c1a0`, game.so
+  at `eb1d721`), with `sv_minRate 50000` in `server_opm.cfg`. First
+  minutes at 2-3 humans: ring covers 115-214 s.
 
 The 2026-10-26 packet-demo commits were rolled back by JayRewd on
 2026-10-28 (force-push of both repos to `5cc65d2`), on purpose. JayRewd's
@@ -39,7 +47,8 @@ the owner said to ignore them for now.
 - VPS `forte-openmohaa` (Debian 13, glibc 2.41, 2 vCPU KVM). Game in
   `/home/debian/moh`, `mohaa.service`, port 12203, `sv_fps 20`,
   `sv_maxclients 32`, 5 roombas, up to 11 regular SMG bots below 16 players.
-  `sv_minRate 20000` was added to `main/server_opm.cfg` on 2026-10-29.
+  `sv_minRate` in `main/server_opm.cfg`: 20000 from 2026-10-29, 50000
+  from 2026-10-30 10:14 UTC.
 - Builds from a newer distro do not run there (Ubuntu glibc 2.43). Build
   `omohaaded` on a Debian 13 host (`openmohaa-bot-vps` was used: send the
   commit with `git archive`, build in /tmp, delete afterwards). `game.so`
@@ -317,7 +326,8 @@ Audit recommendations that need an owner decision or game assets:
 
 ## Exact next action
 
-Read the frame and snapshot stats from more full evenings
-(`journalctl -u mohaa.service --grep "Server (frame|snapshot) stats"`). If
-rate holds stay above ~1-2% at 20+ humans, raise `sv_minRate` (config only);
-if mid-game frame spikes over 40 ms recur, find what that tick ran.
+After a full evening on `e41c1a0`, compare player stall episodes (group
+"Delta request from out of date" lines per player, 2 s apart) and the
+ring coverage at 20+ humans with 2026-10-29 (0.63 episodes/min, 0.22 with
+a ring reset). If mid-game frame spikes over 40 ms recur, find what that
+tick ran.
