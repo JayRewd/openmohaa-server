@@ -36,6 +36,18 @@ Since the PR #1 merge (`5cc65d2`):
 - Live since 2026-10-30 10:14:19 UTC (`omohaaded` at `e41c1a0`, game.so
   at `eb1d721`), with `sv_minRate 50000` in `server_opm.cfg`. First
   minutes at 2-3 humans: ring covers 115-214 s.
+- `029e45f` a player's missing custom model is skipped until the map
+  changes (no "Bad model name" at every respawn). `1d358bd` loopback rcon
+  (127.0.0.0/8, ::1) has its own bucket of 50 refilling at 50/s; others
+  keep 10 refilling at 1/s.
+- Live since 2026-10-30 11:01:10 UTC: `omohaaded` and `game.so` at
+  `1d358bd`; `main/z_forteffa.pk3` without the "mam" mod leftovers (its
+  death-box scripts and the Spearhead-only precache; the package is not
+  in this repo; the previous one is in
+  `.deploy-backups/prod-pre-1d358bd-20261030T105919Z/`). The guard env
+  (`/etc/moharena/guard-aa.env`) has `MOHARENA_AC_AUDIT_INTERVAL=30` and
+  `MOHARENA_GUARD_HEARTBEAT_INTERVAL=60`. First minutes: rcon drops and
+  guard timeouts 0 (were ~36/min), no script errors at map loads.
 
 The 2026-10-26 packet-demo commits were rolled back by JayRewd on
 2026-10-28 (force-push of both repos to `5cc65d2`), on purpose. JayRewd's
@@ -283,6 +295,10 @@ Audit recommendations that need an owner decision or game assets:
 - The daily 02:55 UTC VM pause needs the owner to check the VPS provider
   panel (automated backups or snapshots) or open a ticket.
 - What fills the per-client CGM buffer mid-game is not known yet.
+- The guard's resources tick (`MOHARENA_GUARD_RESOURCES_TICK_INTERVAL`,
+  default 5 s) sends status, serverinfo and 7 cvar reads each time; now
+  that they are answered it is the guard's biggest rcon load. Raising it
+  waits for the owner.
 
 ## Verified earlier (committed history)
 

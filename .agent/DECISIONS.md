@@ -151,3 +151,11 @@ that `SV_DirectConnect` prints only with `developer` on (connect and token
 checks). `logfile 2` flushes each line so the sidecar sees it at once.
 Their cost does not line up with frame overruns (checked 2026-10-29), so
 they stay unless the sidecar changes.
+
+## D-018: The guard sidecar is tuned by its env, not its code
+
+`/opt/moharena-guard/sidecar.py` is MoH Arena's code and updates itself
+(`MOHARENA_SIDECAR_AUTO_UPDATE=1`), so local edits would be lost. Its
+load on the game server is changed through `/etc/moharena/guard-aa.env`
+intervals, and the server gives loopback rcon its own bucket because the
+guard sends its per-player checks as one burst (owner, 2026-10-30).
