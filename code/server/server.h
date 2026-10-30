@@ -297,6 +297,12 @@ typedef struct {
 } nonpvs_sound_cache_t;
 
 // this structure will be cleared only when the game dll changes
+// Entity slots per client per backup frame in svs.snapshotEntities. Stock
+// used MAX_CLIENTS (64), which a full server wraps in under a second, so a
+// client whose last acknowledged snapshot was still in PACKET_BACKUP got a
+// full snapshot anyway. 256 covers PACKET_BACKUP frames at full load.
+#define SNAPSHOT_RING_ENTITIES	256
+
 typedef struct {
 	qboolean	initialized;				// sv_init has completed
 
@@ -312,7 +318,7 @@ typedef struct {
 
 	client_t	*clients;					// [sv_maxclients->integer];
 	int			iNumClients;
-	int			numSnapshotEntities;		// sv_maxclients->integer*PACKET_BACKUP*MAX_SNAPSHOT_ENTITIES
+	int			numSnapshotEntities;		// sv_maxclients->integer*PACKET_BACKUP*SNAPSHOT_RING_ENTITIES
 	int			nextSnapshotEntities;		// next snapshotEntities to use
 	entityState_t	*snapshotEntities;		// [numSnapshotEntities]
 	int			nextHeartbeatTime;

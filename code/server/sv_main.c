@@ -980,6 +980,8 @@ static struct {
 	int64_t	snapBytes;
 	int		snapMaxBytes;
 	int		clientDue[MAX_CLIENTS], clientHeld[MAX_CLIENTS];
+	int64_t	ringSlots;					// svs.snapshotEntities slots used
+	int		lastNextSnapshotEntities;
 } frameStats;
 
 void SV_FrameStatsSnapshot( const client_t *client, snapStat_t stat, int bytes ) {
@@ -1008,10 +1010,10 @@ void SV_FrameStatsSnapshot( const client_t *client, snapStat_t stat, int bytes )
 	}
 }
 
-static void SV_ReportSnapshotStats( void ) {
+static void SV_ReportSnapshotStats( float seconds ) {
 	int		i;
 	int		due, heldClients;
-	float	worst;
+	float	worst, ringSeconds;
 
 	due = frameStats.snapSent + frameStats.snapHeldRate + frameStats.snapHeldFragments;
 	if ( !due ) {
@@ -1027,14 +1029,17 @@ static void SV_ReportSnapshotStats( void ) {
 		}
 	}
 
+	// how far back a delta base can be before its entities are overwritten
+	ringSeconds = frameStats.ringSlots ? svs.numSnapshotEntities * seconds / frameStats.ringSlots : 0;
+
 	Com_Printf( "Server snapshot stats: %d sent, %d held by rate (%.1f%%), %d held by fragments (%.1f%%); "
-		"%d players held at least once, worst %.1f%%; size avg %d B, max %d B\n",
+		"%d players held at least once, worst %.1f%%; size avg %d B, max %d B; entity ring covers %.1f s\n",
 		frameStats.snapSent,
 		frameStats.snapHeldRate, 100.0f * frameStats.snapHeldRate / due,
 		frameStats.snapHeldFragments, 100.0f * frameStats.snapHeldFragments / due,
 		heldClients, 100.0f * worst,
 		frameStats.snapSent ? (int)( frameStats.snapBytes / frameStats.snapSent ) : 0,
-		frameStats.snapMaxBytes );
+		frameStats.snapMaxBytes, ringSeconds );
 }
 
 static void SV_ReportFrameStats( int64_t now ) {
@@ -1074,7 +1079,7 @@ static void SV_ReportFrameStats( int64_t now ) {
 		frameStats.frameUsec / 1000.0f / frameStats.ticks, frameStats.maxFrameUsec / 1000.0f,
 		frameStats.packetUsec / 1000.0f / frameStats.ticks, frameStats.maxPacketUsec / 1000.0f,
 		frameStats.slowTicks, frameStats.packets / seconds );
-	SV_ReportSnapshotStats();
+	SV_ReportSnapshotStats( seconds );
 }
 
 static void SV_UpdateFrameStats( int64_t frameStart, int frameMsec ) {
@@ -1086,8 +1091,17 @@ static void SV_UpdateFrameStats( int64_t frameStart, int frameMsec ) {
 		sv_frameStats->modified = qfalse;
 		Com_Memset( &frameStats, 0, sizeof( frameStats ) );
 		frameStats.reportStart = now;
+		frameStats.lastNextSnapshotEntities = svs.nextSnapshotEntities;
 		return;
 	}
+
+	// a map change restarts the ring index at 0
+	if ( svs.nextSnapshotEntities >= frameStats.lastNextSnapshotEntities ) {
+		frameStats.ringSlots += svs.nextSnapshotEntities - frameStats.lastNextSnapshotEntities;
+	} else {
+		frameStats.ringSlots += svs.nextSnapshotEntities;
+	}
+	frameStats.lastNextSnapshotEntities = svs.nextSnapshotEntities;
 
 	frameStats.ticks++;
 	frameStats.frameUsec += frameUsec;
@@ -1105,6 +1119,7 @@ static void SV_UpdateFrameStats( int64_t frameStart, int frameMsec ) {
 		SV_ReportFrameStats( now );
 		Com_Memset( &frameStats, 0, sizeof( frameStats ) );
 		frameStats.reportStart = now;
+		frameStats.lastNextSnapshotEntities = svs.nextSnapshotEntities;
 	}
 }
 
