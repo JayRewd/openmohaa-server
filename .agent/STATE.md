@@ -110,9 +110,26 @@ the owner said to ignore them for now.
   2026-10-30, so the first such spawn on a map makes every client load
   it mid-game. That's once per map at most, so it doesn't explain frequent
   hangs. Not changed.
-- Next test at 20+ humans: the owner turns on `cg_lagometer 1`, notes the
-  time of each hang, and a capture runs meanwhile. Red or yellow snapshot
-  bars mean the network; a clean graph during a freeze means the client.
+- The owner says many players report the hangs when the server is full,
+  so they are not one client. Yesterday's log (2026-10-30 16:00-00:12
+  UTC, 494 minutes) has no tick over 68 ms at any player count; only
+  snapshots held a tick for fragments grow with players (2.2 players/min
+  at <=12 humans, 13.2 at 21+), 50 ms each.
+- Lead: a model, sound or image added to the configstrings during play
+  (`SV_SetConfigstring` → client `CG_ProcessConfigString` /
+  `S_RegisterSound`) makes every client load it at once on its main
+  thread. A local 5-roomba run on dm/mohdm6 added pain voice lines
+  (`sound/dialogue/Generic/A/damage/dpl_damage_1xi.wav`, streamed) at 19,
+  22 and 49 s into the map. More players mean more of these. `2d696d1`
+  logs each one ("Late precache: ..."); the VPS smoke run passed and the
+  binary is staged in `.deploy-stage/2d696d1-20261031/` (not installed).
+  Do not precache a fix before counting slots: `MAX_SOUNDS` is 512 and
+  `SV_FindIndex` overflow is a `Com_Error`.
+- Analysis scripts (scratchpad, not in the repo): a capture of every
+  player at 21+ humans finds waits over 150 ms per player and moments
+  when many players' packets stop together (against a shuffled chance
+  level), and with a `journalctl -o short-unix` log, how many players
+  pause within 0.8 s after each late precache.
 
 ### In the tree (kept)
 
@@ -364,9 +381,11 @@ Audit recommendations that need an owner decision or game assets:
 
 ## Exact next action
 
-When the server has 20+ humans and the owner plays with `cg_lagometer 1`,
-capture `udp port 12203` and check their snapshot completion gaps at the
-times they note (see "Owner's 0.3 s hangs"). Separately, after a full
+With the owner's go-ahead, install the staged `2d696d1` `omohaaded`
+(backup first). After a full afternoon at 21+ humans, list the "Late
+precache" lines per map, check whether players' packets stop together
+after them (see "Owner's 0.3 s hangs"), then precache the frequent ones
+within the slot limit. Separately, after a full
 evening on `1d358bd`, compare player stall episodes (group
 "Delta request from out of date" lines per player, 2 s apart) and the
 ring coverage at 20+ humans with 2026-10-29 (0.63 episodes/min, 0.22 with
