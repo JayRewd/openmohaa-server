@@ -58,14 +58,15 @@ Since the PR #1 merge (`5cc65d2`):
   minute it logged 17 pain/death voice lines (most of these files are in
   no pak; the client then loads `sound/default.wav`) and
   `models/items/dm_50_healthbox.tik` (the first death drop on each map).
-- Owner approved adding `cache models/items/dm_50_healthbox.tik` to
-  `global/DMprecache.scr` in `main/z_forteffa.pk3` (after the binoculars
-  line), live at the 2026-10-31 04:00 UTC reboot. The package (sha
-  `9417474004b2a1bb`) is in `.deploy-stage/pk3-healthbox-20261031/`; a
-  transient `forte-pk3-healthbox.timer` copies it into `main/` at 03:58:30
-  UTC. The live server is not swapped earlier because a few readers reopen
-  a pk3 by name (`uniqueFILE`). After the reboot, check that the sha
-  matches and no "Late precache: model ...dm_50_healthbox" appears.
+- Live since the 2026-10-31 04:00 UTC reboot (owner's go-ahead):
+  `main/z_forteffa.pk3` sha `9417474004b2a1bb`, which adds
+  `cache models/items/dm_50_healthbox.tik` to `global/DMprecache.scr`
+  after the binoculars line. A transient `forte-pk3-healthbox.timer`
+  copied it from `.deploy-stage/pk3-healthbox-20261031/` at 03:58:30 UTC
+  (Result=success); the live server was not swapped earlier because a few
+  readers reopen a pk3 by name (`uniqueFILE`). Checked at 04:26 UTC: mohaa
+  active since 04:00:26, no script errors, deaths happened (the 17 voice
+  lines were logged) and no "Late precache: model" line at all.
 
 The 2026-10-26 packet-demo commits were rolled back by JayRewd on
 2026-10-28 (force-push of both repos to `5cc65d2`), on purpose. JayRewd's
@@ -396,8 +397,9 @@ Audit recommendations that need an owner decision or game assets:
 
 ## Exact next action
 
-`2d696d1` is live (2026-10-31 01:59 UTC). After a full afternoon at 21+
-humans, list the "Late precache" lines per map, check whether players'
+`2d696d1` is live (2026-10-31 01:59 UTC) and the health box precache
+since the 04:00 UTC reboot. After a full afternoon at 21+ humans, list
+the "Late precache" lines per map, check whether players'
 packets stop together after them (see "Owner's 0.3 s hangs"), then
 precache the frequent ones within the slot limit. Separately, after a
 full evening on `1d358bd` or later, compare player stall episodes (group
