@@ -178,6 +178,23 @@ void SV_SetConfigstring (int index, const char *val) {
 	sv.configstrings[index] = CopyString( val );
 	SV_FindIndexCacheChanged( index );
 
+	// every client loads a model, sound or image added during play on the
+	// spot, so log them to find what the precache scripts miss
+	if ( sv.state == SS_GAME && val[0] ) {
+		const char *kind = NULL;
+
+		if ( index >= CS_MODELS && index < CS_MODELS + MAX_MODELS ) {
+			kind = "model";
+		} else if ( index >= CS_SOUNDS && index < CS_SOUNDS + MAX_SOUNDS ) {
+			kind = "sound";
+		} else if ( index >= CS_IMAGES && index < CS_IMAGES + MAX_IMAGES ) {
+			kind = "image";
+		}
+		if ( kind ) {
+			Com_Printf( "Late precache: %s %s, %d s into the map\n", kind, val, ( svs.time - svs.startTime ) / 1000 );
+		}
+	}
+
 	// send it to all the clients if we aren't
 	// spawning a new server
 	if (sv.state == SS_LOADING2 || sv.state == SS_GAME || sv.restarting ) {
