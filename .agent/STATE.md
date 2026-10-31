@@ -54,7 +54,18 @@ Since the PR #1 merge (`5cc65d2`):
 - Live since 2026-10-31 01:59:35 UTC (owner's go-ahead, 7 humans on):
   `omohaaded` at `2d696d1` (logs "Late precache: ..."), `game.so` still
   `1d358bd`. Previous files in
-  `.deploy-backups/prod-pre-2d696d1-20261031T015934Z/`.
+  `.deploy-backups/prod-pre-2d696d1-20261031T015934Z/`. In the first
+  minute it logged 17 pain/death voice lines (most of these files are in
+  no pak; the client then loads `sound/default.wav`) and
+  `models/items/dm_50_healthbox.tik` (the first death drop on each map).
+- Owner approved adding `cache models/items/dm_50_healthbox.tik` to
+  `global/DMprecache.scr` in `main/z_forteffa.pk3` (after the binoculars
+  line), live at the 2026-10-31 04:00 UTC reboot. The package (sha
+  `9417474004b2a1bb`) is in `.deploy-stage/pk3-healthbox-20261031/`; a
+  transient `forte-pk3-healthbox.timer` copies it into `main/` at 03:58:30
+  UTC. The live server is not swapped earlier because a few readers reopen
+  a pk3 by name (`uniqueFILE`). After the reboot, check that the sha
+  matches and no "Late precache: model ...dm_50_healthbox" appears.
 
 The 2026-10-26 packet-demo commits were rolled back by JayRewd on
 2026-10-28 (force-push of both repos to `5cc65d2`), on purpose. JayRewd's
