@@ -51,6 +51,10 @@ Since the PR #1 merge (`5cc65d2`):
   serverinfo and 7 cvar reads each tick). Guard rcon: 96/min with 36.5
   drops/min at ~6 humans before; 61.6/min with none dropped at ~21
   humans after. No script errors at map loads.
+- Live since 2026-10-31 01:59:35 UTC (owner's go-ahead, 7 humans on):
+  `omohaaded` at `2d696d1` (logs "Late precache: ..."), `game.so` still
+  `1d358bd`. Previous files in
+  `.deploy-backups/prod-pre-2d696d1-20261031T015934Z/`.
 
 The 2026-10-26 packet-demo commits were rolled back by JayRewd on
 2026-10-28 (force-push of both repos to `5cc65d2`), on purpose. JayRewd's
@@ -381,12 +385,11 @@ Audit recommendations that need an owner decision or game assets:
 
 ## Exact next action
 
-With the owner's go-ahead, install the staged `2d696d1` `omohaaded`
-(backup first). After a full afternoon at 21+ humans, list the "Late
-precache" lines per map, check whether players' packets stop together
-after them (see "Owner's 0.3 s hangs"), then precache the frequent ones
-within the slot limit. Separately, after a full
-evening on `1d358bd`, compare player stall episodes (group
+`2d696d1` is live (2026-10-31 01:59 UTC). After a full afternoon at 21+
+humans, list the "Late precache" lines per map, check whether players'
+packets stop together after them (see "Owner's 0.3 s hangs"), then
+precache the frequent ones within the slot limit. Separately, after a
+full evening on `1d358bd` or later, compare player stall episodes (group
 "Delta request from out of date" lines per player, 2 s apart) and the
 ring coverage at 20+ humans with 2026-10-29 (0.63 episodes/min, 0.22 with
 a ring reset). If mid-game frame spikes over 40 ms recur, find what that
