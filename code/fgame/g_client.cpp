@@ -28,6 +28,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #include "scriptmaster.h"
 #include "g_spawn.h"
 #include "g_bot.h"
+#include "g_password.h"
 
 // g_client.c -- client functions that don't happen every frame
 
@@ -1024,8 +1025,7 @@ const char *G_ClientConnect(int clientNum, qboolean firstTime, qboolean differen
     if ((strcmp(ip, "localhost") != 0)) {
         // check for a password
         value = Info_ValueForKey(userinfo, "password");
-        if (strcmp(sv_privatePassword->string, value) != 0 && *password->string
-            && strcmp(password->string, value) != 0) {
+        if (!G_JoinPasswordAccepted(password->string, sv_privatePassword->string, value)) {
             return "Invalid password";
         }
     }
